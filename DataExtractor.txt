@@ -18,7 +18,7 @@ Private Function GetMergedCellValue(worksheetTarget As Worksheet, cellAddress As
     
     ' ワークシートが有効かチェック
     If IsWorksheetEmpty(worksheetTarget) Then
-        GetMergedCellValue = ""
+        GetMergedCellValue = "test"
         Exit Function
     End If
     
