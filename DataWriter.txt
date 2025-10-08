@@ -1,0 +1,249 @@
+Option Explicit
+
+' 取得した中身を書き込むモジュール
+' データを配列に格納し、処理を行う
+
+' 抽出されたデータを配列に変換する関数（計算処理なし）
+Public Function WriteDataToArray(extractedData As Variant) As Variant
+    Dim sheetDataArray As Variant
+    Dim totalRows As Long
+    Dim currentRow As Long
+    Dim i As Long
+    Dim fileData As Object
+    Dim dataCollection As Collection
+    Dim rowData As Variant
+    Dim j As Long
+    Dim headers As Variant
+    Dim isFirstFile As Boolean
+    
+    On Error GoTo ErrorHandler
+    
+    If IsEmpty(extractedData) Or extractedData.Count = 0 Then
+        Debug.Print "WriteDataToArray: 抽出データが空です"
+        WriteDataToArray = Empty
+        Exit Function
+    End If
+    
+    Debug.Print "WriteDataToArray: 抽出データ件数 = " & extractedData.Count
+    
+    ' 総行数を計算
+    totalRows = 0
+    For i = 0 To extractedData.Count - 1
+        Set fileData = extractedData.Items()(i)
+        If fileData.Exists("Data") Then
+            Set dataCollection = fileData("Data")
+            If Not dataCollection Is Nothing Then
+                totalRows = totalRows + dataCollection.Count
+                Debug.Print "ファイル " & (i + 1) & " のデータ行数: " & dataCollection.Count
+            Else
+                Debug.Print "ファイル " & (i + 1) & " のデータコレクションがNullです"
+            End If
+        Else
+            Debug.Print "ファイル " & (i + 1) & " にDataキーが存在しません"
+        End If
+    Next i
+    
+    Debug.Print "総データ行数: " & totalRows
+    
+    ' データが0行の場合の処理
+    If totalRows = 0 Then
+        Debug.Print "抽出されたデータが0行です。ヘッダーのみの配列を作成します。"
+        ReDim sheetDataArray(1 To 1, 1 To 4)
+        sheetDataArray(1, 1) = "リスク項目No."
+        sheetDataArray(1, 2) = "危険状態"
+        sheetDataArray(1, 3) = "危害"
+        sheetDataArray(1, 4) = "重大さレベル"
+        WriteDataToArray = sheetDataArray
+        Exit Function
+    End If
+    
+    ' 配列を初期化（ヘッダー行 + データ行）- 4列のみ（B,F,G,H列）
+    ReDim sheetDataArray(1 To totalRows + 1, 1 To 4)
+    currentRow = 1
+    isFirstFile = True
+    
+    ' 各ファイルのデータを配列に書き込み
+    For i = 0 To extractedData.Count - 1
+        Set fileData = extractedData.Items()(i)
+        
+        ' 最初のファイルの場合、ヘッダーを設定
+        If isFirstFile Then
+            headers = fileData("Headers")
+            
+            ' ヘッダー配列の型安全性チェック
+            If IsArray(headers) Then
+                ' 配列の要素数を確認して安全に代入
+                If UBound(headers) >= 1 Then sheetDataArray(1, 1) = CStr(headers(1))
+                If UBound(headers) >= 2 Then sheetDataArray(1, 2) = CStr(headers(2))
+                If UBound(headers) >= 3 Then sheetDataArray(1, 3) = CStr(headers(3))
+                If UBound(headers) >= 4 Then sheetDataArray(1, 4) = CStr(headers(4))
+                
+                Debug.Print "ヘッダー設定完了（英語統一）:"
+                Debug.Print "  列1: " & sheetDataArray(1, 1)
+                Debug.Print "  列2: " & sheetDataArray(1, 2)
+                Debug.Print "  列3: " & sheetDataArray(1, 3)
+                Debug.Print "  列4: " & sheetDataArray(1, 4)
+            Else
+                Debug.Print "ヘッダーが配列ではありません。型: " & TypeName(headers)
+                ' デフォルトヘッダーを設定（日本語デフォルト）
+                sheetDataArray(1, 1) = "リスク項目No."
+                sheetDataArray(1, 2) = "危険状態"
+                sheetDataArray(1, 3) = "危害"
+                sheetDataArray(1, 4) = "重大さレベル"
+            End If
+            isFirstFile = False
+        End If
+        
+        ' データを書き込み
+        Set dataCollection = fileData("Data")
+        For j = 1 To dataCollection.Count
+            currentRow = currentRow + 1
+            rowData = dataCollection(j)
+            
+            ' データ行の型安全性チェック
+            If IsArray(rowData) Then
+                If UBound(rowData) >= 1 Then sheetDataArray(currentRow, 1) = CStr(rowData(1))
+                If UBound(rowData) >= 2 Then sheetDataArray(currentRow, 2) = CStr(rowData(2))
+                If UBound(rowData) >= 3 Then sheetDataArray(currentRow, 3) = CStr(rowData(3))
+                If UBound(rowData) >= 4 Then sheetDataArray(currentRow, 4) = CStr(rowData(4))
+            Else
+                Debug.Print "行データが配列ではありません。行: " & currentRow & ", 型: " & TypeName(rowData)
+                ' 空文字で埋める
+                sheetDataArray(currentRow, 1) = ""
+                sheetDataArray(currentRow, 2) = ""
+                sheetDataArray(currentRow, 3) = ""
+                sheetDataArray(currentRow, 4) = ""
+            End If
+        Next j
+    Next i
+    
+    ' 使用した行数に配列をリサイズ
+    If currentRow < UBound(sheetDataArray, 1) Then
+        ReDim Preserve sheetDataArray(1 To currentRow, 1 To 4)
+    End If
+    
+    ' データのクリーニング（改行除去）
+    For i = 1 To UBound(sheetDataArray, 1)
+        For j = 1 To UBound(sheetDataArray, 2)
+            If Not IsEmpty(sheetDataArray(i, j)) Then
+                sheetDataArray(i, j) = Replace(sheetDataArray(i, j), vbLf, "")
+                sheetDataArray(i, j) = Replace(sheetDataArray(i, j), vbCr, "")
+            End If
+        Next j
+    Next i
+    
+    WriteDataToArray = sheetDataArray
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "WriteDataToArray でエラー: " & Err.Description
+    WriteDataToArray = Empty
+End Function
+
+' 全ファイルのデータを配列に書き込む関数
+Public Function WriteAllFilesToArray(selectedFiles As Collection) As Variant
+    Dim sheetDataArray As Variant
+    Dim fileObj As Object
+    Dim i As Long
+    Dim totalRows As Long
+    Dim currentRow As Long
+    Dim isFirstFile As Boolean
+    Dim headers As Variant
+    
+    If selectedFiles Is Nothing Or selectedFiles.Count = 0 Then
+        MsgBox "ファイルが選択されていません。"
+        WriteAllFilesToArray = Empty
+        Exit Function
+    End If
+    
+    ' 必要な配列サイズを計算
+    totalRows = DataProcessor.CalculateArraySize(selectedFiles)
+    
+    ' 配列を初期化
+    sheetDataArray = DataProcessor.InitializeDataArray(totalRows)
+    
+    ' 現在の行位置を管理
+    currentRow = 1
+    isFirstFile = True
+    
+    ' 選択されたファイルオブジェクトを順次処理
+    For i = 1 To selectedFiles.Count
+        Set fileObj = selectedFiles(i)
+        
+        Debug.Print "ファイル名: " & fileObj.Name
+        Debug.Print "フルパス: " & fileObj.Path
+        Debug.Print "---"
+        
+        ' 最初のファイルの場合、ヘッダー情報を設定
+        If isFirstFile Then
+            headers = DataExtractor.GetFileHeaders(fileObj)
+            sheetDataArray = DataProcessor.SetArrayHeaders(sheetDataArray, headers)
+            isFirstFile = False
+        End If
+        
+        ' ファイルデータを配列に書き込み
+        currentRow = DataExtractor.GetFileData(fileObj, currentRow, sheetDataArray)
+    Next i
+    
+    ' 配列サイズを最適化
+    sheetDataArray = DataProcessor.OptimizeArraySize(sheetDataArray, currentRow)
+    
+    ' データのクリーニング
+    sheetDataArray = DataProcessor.CleanDataArray(sheetDataArray)
+    
+    WriteAllFilesToArray = sheetDataArray
+End Function
+
+' 単一ファイルのデータを配列に書き込む関数
+Public Function WriteSingleFileToArray(fileObj As Object) As Variant
+    Dim sheetDataArray As Variant
+    Dim totalRows As Long
+    Dim currentRow As Long
+    Dim headers As Variant
+    
+    If fileObj Is Nothing Then
+        WriteSingleFileToArray = Empty
+        Exit Function
+    End If
+    
+    ' ファイルの行数を取得
+    totalRows = DataExtractor.GetFileRowCount(fileObj)
+    
+    ' 配列を初期化
+    sheetDataArray = DataProcessor.InitializeDataArray(totalRows)
+    
+    ' ヘッダー情報を設定
+    headers = DataExtractor.GetFileHeaders(fileObj)
+    sheetDataArray = DataProcessor.SetArrayHeaders(sheetDataArray, headers)
+    
+    ' ファイルデータを配列に書き込み
+    currentRow = DataExtractor.GetFileData(fileObj, 1, sheetDataArray)
+    
+    ' 配列サイズを最適化
+    sheetDataArray = DataProcessor.OptimizeArraySize(sheetDataArray, currentRow)
+    
+    ' データのクリーニング
+    sheetDataArray = DataProcessor.CleanDataArray(sheetDataArray)
+    
+    WriteSingleFileToArray = sheetDataArray
+End Function
+
+' 配列データを検証する関数
+Public Function ValidateArrayData(sheetDataArray As Variant) As Boolean
+    If IsEmpty(sheetDataArray) Then
+        ValidateArrayData = False
+        Debug.Print "配列データが空です"
+    ElseIf UBound(sheetDataArray, 1) <= 1 Then
+        ValidateArrayData = False
+        Debug.Print "有効なデータ行がありません"
+    Else
+        ValidateArrayData = True
+        Debug.Print "配列データの検証が完了しました: " & UBound(sheetDataArray, 1) & "行 x " & UBound(sheetDataArray, 2) & "列"
+    End If
+End Function
+
+' 配列データをクリアする関数
+Public Function ClearArrayData() As Variant
+    Dim emptyArray As Variant
+    ClearArrayData = emptyArray
+End Function

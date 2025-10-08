@@ -1,0 +1,366 @@
+Option Explicit
+
+' ファイル読み込みモジュール
+' ファイル選択ダイアログを表示し、選択されたファイルオブジェクトのCollectionを返す
+
+' 検索対象キーワードの定数
+Private Const RISK_ITEM_NO As String = "リスク項目No."
+Private Const DANGER_STATE As String = "危険状態"
+Private Const HARM As String = "危害"
+Private Const SEVERITY_LEVEL As String = "重大さレベル"
+
+' 検索結果を格納する構造体
+Public Type SheetSearchResult
+    riskItemNoAddress As String
+    dangerStateAddress As String
+    harmAddress As String
+    severityLevelAddress As String
+    sheetName As String
+    isValid As Boolean
+End Type
+
+Public Function GetSelectedFiles() As Collection
+    Dim fd As FileDialog
+    Dim selectedFiles As FileDialogSelectedItems
+    Dim i As Long
+    Dim filePath As String
+    Dim fileObj As Object
+    Dim selectedFilesList As Collection
+    
+    ' Collectionオブジェクトを初期化
+    Set selectedFilesList = New Collection
+    
+    ' ファイル選択ダイアログを作成
+    Set fd = Application.FileDialog(msoFileDialogFilePicker)
+    
+    ' ダイアログの設定
+    With fd
+        .Title = "取り込みファイルを選択してください"
+        .AllowMultiSelect = True  ' 複数選択を許可
+        .InitialFileName = "C:\"  ' 初期フォルダ
+        ' フィルタを設定
+        .Filters.Clear
+        .Filters.Add "すべてのファイル", "*.*"
+        .Filters.Add "Excelファイル", "*.xlsx;*.xls"
+        .Filters.Add "テキストファイル", "*.txt"
+    End With
+    
+    ' ダイアログを表示してOKが押された場合
+    If fd.Show = -1 Then
+        Set selectedFiles = fd.SelectedItems
+        
+        ' 選択されたファイル数を表示
+        MsgBox selectedFiles.Count & "個のファイルが選択されました。"
+        
+        ' 各ファイルをオブジェクトとしてCollectionに格納
+        For i = 1 To selectedFiles.Count
+            filePath = selectedFiles(i)
+            
+            ' ファイル情報オブジェクトを作成
+            Set fileObj = CreateObject("Scripting.FileSystemObject").GetFile(filePath)
+            
+            ' Collectionに追加
+            selectedFilesList.Add fileObj
+            
+            Debug.Print "追加されたファイル: " & fileObj.Name & " (サイズ: " & fileObj.Size & " bytes)"
+        Next i
+        
+    Else
+        MsgBox "キャンセルされました。"
+        Set selectedFilesList = Nothing
+    End If
+    
+    Set GetSelectedFiles = selectedFilesList
+    
+    Set fd = Nothing
+    Set selectedFiles = Nothing
+End Function
+
+' 特定のインデックスのファイルオブジェクトを取得する関数
+Public Function GetFileByIndex(selectedFilesList As Collection, index As Long) As Object
+    If selectedFilesList Is Nothing Then
+        Set GetFileByIndex = Nothing
+        Exit Function
+    End If
+    
+    If index >= 1 And index <= selectedFilesList.Count Then
+        Set GetFileByIndex = selectedFilesList(index)
+    Else
+        Set GetFileByIndex = Nothing
+    End If
+End Function
+
+' ファイル内のシートから検索キーワードを探す関数
+Public Function FindKeywordsInFile(fileObj As Object) As Collection
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim searchResults As Collection
+    Dim sheetResult As SheetSearchResult
+    Dim resultDict As Object
+    Dim i As Long
+    
+    Set searchResults = New Collection
+    
+    If IsExcelFile(fileObj) = False Then
+        Set FindKeywordsInFile = searchResults
+        Exit Function
+    End If
+    
+    On Error GoTo ErrorHandler
+    
+    ' Excelファイルを非表示で開く
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    Set wb = Workbooks.Open(fileObj.Path, UpdateLinks:=0, ReadOnly:=True)
+    wb.Windows(1).Visible = False
+    
+    ' 各シートをチェック
+    For i = 1 To wb.Worksheets.Count
+        Set ws = wb.Worksheets(i)
+        Debug.Print "ファイル「" & fileObj.Name & "」のシート「" & ws.Name & "」を処理中..."
+        sheetResult = SearchKeywordsInSheet(ws)
+        
+        If sheetResult.isValid Then
+            ' 構造体をDictionaryオブジェクトに変換してCollectionに追加
+            Set resultDict = ConvertStructToDict(sheetResult)
+            searchResults.Add resultDict
+            Debug.Print "対象シート発見: " & sheetResult.sheetName
+        End If
+    Next i
+    
+    Debug.Print "ファイル「" & fileObj.Name & "」で有効な検索結果: " & searchResults.Count & "件"
+    
+CleanUp:
+    If Not wb Is Nothing Then
+        Call SafeCloseWorkbook(wb)
+    End If
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    
+    Set FindKeywordsInFile = searchResults
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindKeywordsInFile でエラー: " & Err.Description & " (ファイル: " & fileObj.Name & ")"
+    GoTo CleanUp
+End Function
+
+' 構造体をDictionaryオブジェクトに変換する関数
+Private Function ConvertStructToDict(sheetResult As SheetSearchResult) As Object
+    Dim resultDict As Object
+    Set resultDict = CreateObject("Scripting.Dictionary")
+    
+    resultDict.Add "riskItemNoAddress", sheetResult.riskItemNoAddress
+    resultDict.Add "dangerStateAddress", sheetResult.dangerStateAddress
+    resultDict.Add "harmAddress", sheetResult.harmAddress
+    resultDict.Add "severityLevelAddress", sheetResult.severityLevelAddress
+    resultDict.Add "sheetName", sheetResult.sheetName
+    resultDict.Add "isValid", sheetResult.isValid
+    
+    Set ConvertStructToDict = resultDict
+End Function
+
+' SafeCloseWorkbook関数をFileReaderにも追加
+Private Sub SafeCloseWorkbook(wb As Workbook)
+    On Error GoTo ErrorHandler
+    
+    ' ワークブックが有効かチェック
+    If wb Is Nothing Then
+        Exit Sub
+    End If
+    
+    ' ワークブックが既に閉じられているかチェック
+    Dim testName As String
+    testName = wb.Name  ' これがエラーになる場合、既に閉じられている
+    
+    ' 正常にクローズ
+    wb.Close SaveChanges:=False
+    Debug.Print "ワークブックを正常に閉じました: " & testName
+    Exit Sub
+    
+ErrorHandler:
+    ' エラーが発生した場合（既に閉じられている等）
+    Debug.Print "ワークブッククローズでエラー（既に閉じられている可能性）: " & Err.Description
+    ' エラーは無視して続行
+End Sub
+
+' シート内でキーワードを検索する関数
+Private Function SearchKeywordsInSheet(ws As Worksheet) As SheetSearchResult
+    Dim result As SheetSearchResult
+    
+    ' 初期化
+    result.sheetName = ws.Name
+    result.isValid = False
+    
+    Debug.Print "シート「" & ws.Name & "」で日本語キーワード検索を開始"
+    
+    ' 各キーワードを検索
+    result.riskItemNoAddress = FindKeywordInSheet(ws, RISK_ITEM_NO)
+    result.dangerStateAddress = FindKeywordInSheet(ws, DANGER_STATE)
+    result.harmAddress = FindKeywordInSheet(ws, HARM)
+    result.severityLevelAddress = FindKeywordInSheet(ws, SEVERITY_LEVEL)
+    
+    ' 検索結果をデバッグ出力
+    Debug.Print "検索結果 - リスク項目No.: " & result.riskItemNoAddress
+    Debug.Print "検索結果 - 危険状態: " & result.dangerStateAddress
+    Debug.Print "検索結果 - 危害: " & result.harmAddress
+    Debug.Print "検索結果 - 重大さレベル: " & result.severityLevelAddress
+    
+    ' 全てのキーワードが見つかった場合のみ有効とする
+    If IsAllKeywordsFound(result) Then
+        result.isValid = True
+        Debug.Print "シート「" & ws.Name & "」は取り込み対象です"
+    Else
+        Debug.Print "シート「" & ws.Name & "」は取り込み対象外です（必要なキーワードが不足）"
+    End If
+    
+    SearchKeywordsInSheet = result
+End Function
+
+' シート内で単一キーワードを検索する関数
+Private Function FindKeywordInSheet(ws As Worksheet, keyword As String) As String
+    Dim foundCell As Range
+    
+    ' まず通常の検索を試行
+    Set foundCell = FindKeywordNormal(ws, keyword)
+    
+    ' 通常の検索で見つからない場合、改行を含む検索を実行
+    If foundCell Is Nothing Then
+        Set foundCell = FindKeywordWithLineBreaks(ws, keyword)
+    End If
+    
+    If foundCell Is Nothing Then
+        FindKeywordInSheet = ""
+        Debug.Print "キーワード「" & keyword & "」が見つかりませんでした（改行検索含む）"
+    Else
+        FindKeywordInSheet = foundCell.Address
+        Debug.Print "キーワード「" & keyword & "」をアドレス " & foundCell.Address & " で発見"
+    End If
+End Function
+
+' 通常のキーワード検索
+Private Function FindKeywordNormal(ws As Worksheet, keyword As String) As Range
+    Set FindKeywordNormal = ws.Cells.Find( _
+        What:=keyword, _
+        LookIn:=xlValues, _
+        LookAt:=xlPart, _
+        SearchOrder:=xlByRows, _
+        SearchDirection:=xlNext, _
+        MatchCase:=False, _
+        MatchByte:=False _
+    )
+End Function
+
+' 改行を含むキーワード検索
+Private Function FindKeywordWithLineBreaks(ws As Worksheet, keyword As String) As Range
+    Dim cell As Range
+    Dim cellValue As String
+    Dim keywordNoSpaces As String
+    Dim cellValueNoSpaces As String
+    
+    On Error GoTo ErrorHandler
+    
+    ' キーワードから改行・スペースを除去
+    keywordNoSpaces = RemoveLineBreaksAndSpaces(keyword)
+    
+    ' 使用範囲内の各セルをチェック
+    For Each cell In ws.UsedRange
+        If Not IsEmpty(cell.value) And cell.value <> "" Then
+            ' 型安全な文字列変換
+            cellValue = SafeStringConvert(cell.value)
+            If cellValue <> "" Then
+                ' セル値から改行・スペースを除去
+                cellValueNoSpaces = RemoveLineBreaksAndSpaces(cellValue)
+                
+                ' 改行・スペースを除去した状態で比較
+                If InStr(1, cellValueNoSpaces, keywordNoSpaces, vbTextCompare) > 0 Then
+                    Set FindKeywordWithLineBreaks = cell
+                    Debug.Print "改行を含むキーワード発見: " & keyword & " → セル値: " & cellValue
+                    Exit Function
+                End If
+            End If
+        End If
+    Next cell
+    
+    Set FindKeywordWithLineBreaks = Nothing
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindKeywordWithLineBreaks でエラー: " & Err.Description & " (セル: " & cell.Address & ")"
+    Resume Next
+End Function
+
+' 安全な文字列変換関数
+Private Function SafeStringConvert(cellValue As Variant) As String
+    On Error GoTo ErrorHandler
+    
+    If IsNumeric(cellValue) Then
+        SafeStringConvert = CStr(cellValue)
+    ElseIf IsDate(cellValue) Then
+        SafeStringConvert = CStr(cellValue)
+    ElseIf VarType(cellValue) = vbString Then
+        SafeStringConvert = cellValue
+    Else
+        SafeStringConvert = CStr(cellValue)
+    End If
+    Exit Function
+    
+ErrorHandler:
+    SafeStringConvert = ""
+End Function
+
+' 改行とスペースを除去する関数
+Private Function RemoveLineBreaksAndSpaces(text As String) As String
+    Dim cleanText As String
+    cleanText = text
+    
+    ' 各種改行文字とスペースを除去
+    cleanText = Replace(cleanText, vbCrLf, "")  ' Windows改行
+    cleanText = Replace(cleanText, vbCr, "")    ' Mac改行
+    cleanText = Replace(cleanText, vbLf, "")    ' Unix改行
+    cleanText = Replace(cleanText, " ", "")     ' 半角スペース
+    cleanText = Replace(cleanText, "　", "")    ' 全角スペース
+    cleanText = Replace(cleanText, vbTab, "")   ' タブ文字
+    
+    RemoveLineBreaksAndSpaces = cleanText
+End Function
+
+' 全てのキーワードが見つかったかチェックする関数
+Private Function IsAllKeywordsFound(result As SheetSearchResult) As Boolean
+    If result.riskItemNoAddress = "" Then
+        IsAllKeywordsFound = False
+        Exit Function
+    End If
+    
+    If result.dangerStateAddress = "" Then
+        IsAllKeywordsFound = False
+        Exit Function
+    End If
+    
+    If result.harmAddress = "" Then
+        IsAllKeywordsFound = False
+        Exit Function
+    End If
+    
+    If result.severityLevelAddress = "" Then
+        IsAllKeywordsFound = False
+        Exit Function
+    End If
+    
+    IsAllKeywordsFound = True
+End Function
+
+' Excelファイルかどうかをチェックする関数
+Private Function IsExcelFile(fileObj As Object) As Boolean
+    Dim fileExtension As String
+    fileExtension = Right(fileObj.Name, 4)
+    
+    Select Case fileExtension
+        Case ".xls", "xlsx"
+            IsExcelFile = True
+        Case Else
+            IsExcelFile = False
+    End Select
+End Function
+

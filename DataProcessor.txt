@@ -1,0 +1,47 @@
+Option Explicit
+
+' 計算モジュール
+' 将来的にデータの計算が必要になった場合にここに実装する
+
+' 配列データの統計情報を計算する関数
+Public Function CalculateStatistics(sheetDataArray As Variant) As String
+    Dim totalRows As Long
+    Dim totalCols As Long
+    Dim dataRows As Long
+    Dim i As Long, j As Long
+    Dim nonEmptyCount As Long
+    
+    On Error GoTo ErrorHandler
+    
+    ' 配列のサイズを取得
+    If IsEmpty(sheetDataArray) Then
+        CalculateStatistics = "データがありません。"
+        Exit Function
+    End If
+    
+    totalRows = UBound(sheetDataArray, 1)
+    totalCols = UBound(sheetDataArray, 2)
+    
+    ' データ行数を計算（ヘッダー行を除く）
+    dataRows = totalRows - 1
+    
+    ' 空でないセルの数を計算
+    For i = 2 To totalRows  ' ヘッダー行をスキップ
+        For j = 1 To totalCols
+            If sheetDataArray(i, j) <> "" Then
+                nonEmptyCount = nonEmptyCount + 1
+            End If
+        Next j
+    Next i
+    
+    ' 統計情報を文字列として返す
+    CalculateStatistics = "総行数: " & totalRows & " (ヘッダー含む)" & vbCrLf & _
+                         "データ行数: " & dataRows & vbCrLf & _
+                         "列数: " & totalCols & vbCrLf & _
+                         "データ入力済みセル数: " & nonEmptyCount
+    Exit Function
+    
+ErrorHandler:
+    CalculateStatistics = "統計情報の計算でエラーが発生しました。"
+End Function
+

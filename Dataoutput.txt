@@ -1,0 +1,168 @@
+Option Explicit
+
+' 書き込んだものをアウトプットするモジュール
+' 処理済みデータをExcelファイルとして出力する
+
+' 配列をExcelに出力する公開サブルーチン
+Public Sub OutputArrayToExcel(sheetDataArray As Variant)
+    Dim newWb As Workbook
+    Dim outputWs As Worksheet
+    Dim outputRange As Range
+    
+    If IsEmpty(sheetDataArray) Then
+        MsgBox "出力するデータがありません。"
+        Exit Sub
+    End If
+    
+    ' データの検証
+    If Not DataWriter.ValidateArrayData(sheetDataArray) Then
+        MsgBox "データの検証に失敗しました。"
+        Exit Sub
+    End If
+    
+    ' 新しいワークブックを作成
+    Set newWb = Workbooks.Add
+    Set outputWs = newWb.Worksheets(1)
+    
+    ' シート名を変更
+    outputWs.Name = "取り込みデータ_" & Format(Now, "yyyymmdd_hhnnss")
+    
+    ' データを一括出力
+    Set outputRange = outputWs.Range(outputWs.Cells(1, 1), outputWs.Cells(UBound(sheetDataArray, 1), UBound(sheetDataArray, 2)))
+    outputRange.value = sheetDataArray
+    
+    ' 書式設定を適用
+    Call ApplyFormatting(outputWs, outputRange, sheetDataArray)
+    
+    ' 新しいワークブックをアクティブにする
+    newWb.Activate
+    outputWs.Select
+    
+    ' 保存処理
+    Call HandleSaveProcess(newWb, sheetDataArray)
+    
+    Debug.Print "配列データを新しいワークブックに出力完了: " & UBound(sheetDataArray, 1) & "行 x " & UBound(sheetDataArray, 2) & "列"
+End Sub
+
+' 書式設定を適用するプライベートサブルーチン
+Private Sub ApplyFormatting(outputWs As Worksheet, outputRange As Range, sheetDataArray As Variant)
+    ' ヘッダー行の書式設定
+    With outputWs.Range(outputWs.Cells(1, 1), outputWs.Cells(1, UBound(sheetDataArray, 2)))
+        .Font.Bold = True
+        .Interior.Color = RGB(200, 200, 200)
+        .Borders.LineStyle = xlContinuous
+    End With
+    
+    ' データ行の罫線
+    With outputRange
+        .Borders.LineStyle = xlContinuous
+        .Borders.Weight = xlThin
+    End With
+    
+    ' 列幅自動調整
+    outputWs.Columns.AutoFit
+    
+    ' 行の高さを統一（適切な高さに設定）
+    With outputRange.Rows
+        .AutoFit  ' まず自動調整
+        .RowHeight = 15  ' 標準的な高さに統一（必要に応じて調整）
+    End With
+    
+    ' ヘッダー行の高さを少し大きく
+    outputWs.Rows(1).RowHeight = 18
+    
+    ' セルの縦位置を中央揃えに
+    With outputRange
+        .VerticalAlignment = xlVAlignCenter
+    End With
+End Sub
+
+' 保存処理を処理するプライベートサブルーチン
+Private Sub HandleSaveProcess(newWb As Workbook, sheetDataArray As Variant)
+    Dim saveFileName As String
+    Dim statistics As String
+    
+    saveFileName = "取り込みデータ_" & Format(Now, "yyyymmdd_hhnnss") & ".xlsx"
+    statistics = DataProcessor.CalculateStatistics(sheetDataArray)
+    
+    ' 保存するかの確認
+    If MsgBox("データの出力が完了しました。" & vbCrLf & _
+              statistics & vbCrLf & vbCrLf & _
+              "新しいワークブックとして保存しますか？", vbYesNo + vbQuestion, "保存確認") = vbYes Then
+        
+        ' 名前を付けて保存ダイアログを表示
+        Dim saveDialog As Variant
+        saveDialog = Application.GetSaveAsFilename( _
+            InitialFileName:=saveFileName, _
+            FileFilter:="Excel ファイル (*.xlsx), *.xlsx", _
+            Title:="取り込みデータを保存")
+        
+        If saveDialog <> False Then
+            newWb.SaveAs saveDialog
+            MsgBox "ファイルを保存しました: " & saveDialog
+        End If
+    End If
+End Sub
+
+' 配列データをCSVとして出力する公開サブルーチン
+Public Sub OutputArrayToCSV(sheetDataArray As Variant)
+    Dim filePath As String
+    Dim fileNum As Integer
+    Dim i As Long, j As Long
+    Dim csvLine As String
+    
+    If IsEmpty(sheetDataArray) Then
+        MsgBox "出力するデータがありません。"
+        Exit Sub
+    End If
+    
+    ' ファイル保存ダイアログ
+    filePath = Application.GetSaveAsFilename( _
+        InitialFileName:="取り込みデータ_" & Format(Now, "yyyymmdd_hhnnss") & ".csv", _
+        FileFilter:="CSV ファイル (*.csv), *.csv", _
+        Title:="CSVファイルとして保存")
+    
+    If filePath = "False" Then Exit Sub
+    
+    ' ファイルを開く
+    fileNum = FreeFile
+    Open filePath For Output As #fileNum
+    
+    ' データを出力
+    For i = 1 To UBound(sheetDataArray, 1)
+        csvLine = ""
+        For j = 1 To UBound(sheetDataArray, 2)
+            If j > 1 Then csvLine = csvLine & ","
+            csvLine = csvLine & """" & Replace(CStr(sheetDataArray(i, j)), """", """""") & """"
+        Next j
+        Print #fileNum, csvLine
+    Next i
+    
+    Close #fileNum
+    MsgBox "CSVファイルを保存しました: " & filePath
+End Sub
+
+' データをプレビュー表示する公開サブルーチン
+Public Sub PreviewArrayData(sheetDataArray As Variant, Optional maxRows As Long = 10)
+    Dim i As Long, j As Long
+    Dim previewText As String
+    Dim rowCount As Long
+    
+    If IsEmpty(sheetDataArray) Then
+        MsgBox "プレビューするデータがありません。"
+        Exit Sub
+    End If
+    
+    rowCount = Application.WorksheetFunction.Min(UBound(sheetDataArray, 1), maxRows)
+    previewText = "データプレビュー（最初の" & rowCount & "行）:" & vbCrLf & vbCrLf
+    
+    For i = 1 To rowCount
+        For j = 1 To UBound(sheetDataArray, 2)
+            previewText = previewText & sheetDataArray(i, j) & vbTab
+        Next j
+        previewText = previewText & vbCrLf
+    Next i
+    
+    MsgBox previewText, vbInformation, "データプレビュー"
+End Sub
+

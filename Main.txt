@@ -1,0 +1,71 @@
+Option Explicit
+
+' Mainモジュール
+' 役割：①～④のモジュールを呼び出すだけ
+
+' メイン処理 - ファイル取り込み処理全体を制御
+Sub ファイル取り込み()
+    Dim selectedFiles As Collection
+    Dim sheetDataArray As Variant
+    
+    ' 処理開始：バックグラウンド処理モードに設定
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    Application.StatusBar = "データ取り込み処理中..."
+    
+    ' ① ファイル読み込み
+    Set selectedFiles = GetSelectedFiles()
+    
+    If selectedFiles Is Nothing Then
+        Exit Sub
+    End If
+    
+    ' ② ファイルの中身を取得（キーワード検索対応）
+    Dim extractedData As Variant
+    Set extractedData = ExtractAllFilesData(selectedFiles)
+    
+    ' データ抽出の検証
+    If extractedData Is Nothing Then
+        MsgBox "データの抽出に失敗しました。", vbCritical
+        Exit Sub
+    End If
+    
+    If extractedData.Count = 0 Then
+        MsgBox "抽出できるデータがありません。キーワードが見つからない可能性があります。", vbExclamation
+        Exit Sub
+    End If
+    
+    Debug.Print "抽出されたファイル数: " & extractedData.Count
+    
+    ' ③ 取得した中身を書き込み（計算処理なしで直接配列化）
+    sheetDataArray = WriteDataToArray(extractedData)
+    
+    ' 配列データの検証
+    If IsEmpty(sheetDataArray) Then
+        MsgBox "配列の作成に失敗しました。", vbCritical
+        Exit Sub
+    End If
+    
+    Debug.Print "配列行数: " & UBound(sheetDataArray, 1) & ", 列数: " & UBound(sheetDataArray, 2)
+    
+    ' 配列内容の確認（最初の数行）
+    Dim i As Long, j As Long
+    For i = 1 To Application.WorksheetFunction.Min(3, UBound(sheetDataArray, 1))
+        Dim rowInfo As String
+        rowInfo = "行" & i & ": "
+        For j = 1 To UBound(sheetDataArray, 2)
+            rowInfo = rowInfo & "[" & j & "]=" & sheetDataArray(i, j) & " "
+        Next j
+        Debug.Print rowInfo
+    Next i
+    
+    ' ④ 書き込んだものをアウトプット
+    Call OutputArrayToExcel(sheetDataArray)
+    
+    ' 処理完了：画面表示を復元
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    Application.StatusBar = False
+    
+    MsgBox "データ取り込み処理が完了しました。", vbInformation, "処理完了"
+End Sub

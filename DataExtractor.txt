@@ -1,0 +1,2889 @@
+Option Explicit
+
+' ファイル内容抽出モジュール
+' Excelファイルから指定列（A, B, C, D, E）のデータを抽出する
+
+' A-H範囲の列定義（5項目抽出）
+Private Const riskItemColumnAddress As String = "A"
+Private Const dangerStateColumnAddress As String = "B"
+Private Const harmColumnAddress As String = "C"
+Private Const severityLevelColumnAddress As String = "D"
+Private Const frequencyColumnAddress As String = "E"
+
+' マージセルの値を取得する関数
+Private Function GetMergedCellValue(worksheetTarget As Worksheet, cellAddress As String) As String
+    Dim targetCell As Range
+    
+    On Error GoTo ErrorHandler
+    
+    ' ワークシートが有効かチェック
+    If IsWorksheetEmpty(worksheetTarget) Then
+        GetMergedCellValue = ""
+        Exit Function
+    End If
+    
+    ' ワークブックアクセス可能性をチェック（自動化エラー防止）
+    If IsWorksheetAccessible(worksheetTarget) = False Then
+        GetMergedCellValue = ""
+        Exit Function
+    End If
+    
+    Set targetCell = worksheetTarget.Range(cellAddress)
+    
+    ' セルのマージ状態に基づいて処理
+    Select Case targetCell.MergeCells
+        Case True
+            Dim mergeValue As String
+            mergeValue = SafeStringConvert(targetCell.MergeArea.Cells(1, 1).value)
+            GetMergedCellValue = mergeValue
+        Case False
+            Dim cellValue As String
+            cellValue = SafeStringConvert(targetCell.value)
+            GetMergedCellValue = cellValue
+    End Select
+    Exit Function
+    
+ErrorHandler:
+    ' 自動化エラーを静かに処理（ログ出力を最小化）
+    GetMergedCellValue = ""
+End Function
+
+' ワークシートが空かどうかをチェックする関数
+Private Function IsWorksheetEmpty(worksheetTarget As Worksheet) As Boolean
+    IsWorksheetEmpty = (worksheetTarget Is Nothing)
+End Function
+
+' ワークシートアクセス可能性をチェックする関数
+Private Function IsWorksheetAccessible(worksheetTarget As Worksheet) As Boolean
+    On Error GoTo ErrorHandler
+    
+    ' Check if worksheet is not Nothing
+    If IsWorksheetEmpty(worksheetTarget) Then
+        IsWorksheetAccessible = False
+        Exit Function
+    End If
+    
+    ' Test worksheet name access (accessibility check)
+    Dim testName As String
+    testName = worksheetTarget.Name
+    
+    ' Check if workbook is valid
+    Dim testWorkbookName As String
+    testWorkbookName = worksheetTarget.Parent.Name
+    
+    ' Simple cell access test
+    Dim testCellValue As String
+    testCellValue = SafeStringConvert(worksheetTarget.Cells(1, 1).value)
+    
+    IsWorksheetAccessible = True
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "IsWorksheetAccessible Error: " & Err.Description
+    IsWorksheetAccessible = False
+End Function
+
+' 安全な文字列変換関数
+Private Function SafeStringConvert(cellValueInput As Variant) As String
+    On Error GoTo ErrorHandler
+    
+    ' 空の値を処理
+    If IsEmptyOrNull(cellValueInput) Then
+        SafeStringConvert = ""
+        Exit Function
+    End If
+    
+    ' Convert based on data type
+    Select Case True
+        Case IsNumeric(cellValueInput)
+            SafeStringConvert = CStr(cellValueInput)
+        Case IsDate(cellValueInput)
+            SafeStringConvert = CStr(cellValueInput)
+        Case VarType(cellValueInput) = vbString
+            SafeStringConvert = cellValueInput
+        Case Else
+            SafeStringConvert = CStr(cellValueInput)
+    End Select
+    Exit Function
+    
+ErrorHandler:
+    SafeStringConvert = ""
+End Function
+
+' Function to check if value is empty or null
+Private Function IsEmptyOrNull(cellValueInput As Variant) As Boolean
+    IsEmptyOrNull = (IsEmpty(cellValueInput) Or IsNull(cellValueInput))
+End Function
+
+' Function to dynamically get column header (auto-detect header row)
+Private Function GetColumnHeader(worksheetTarget As Worksheet, columnLetter As String) As String
+    Dim headerRowNumber As Long
+    Dim headerValue As String
+    
+    ' Dynamically search for column header row
+    headerRowNumber = FindHeaderRowForColumn(worksheetTarget, columnLetter)
+    
+    Select Case headerRowNumber > 0
+        Case True
+            headerValue = GetMergedCellValue(worksheetTarget, columnLetter & headerRowNumber)
+            If IsHeaderValueValid(headerValue) Then
+                GetColumnHeader = headerValue
+            Else
+                GetColumnHeader = columnLetter & " Column"
+            End If
+        Case False
+            GetColumnHeader = columnLetter & " Column"
+    End Select
+    
+    Debug.Print columnLetter & " Column Header: " & GetColumnHeader & " (Header Row: " & headerRowNumber & ")"
+End Function
+
+' Function to check if header value is valid
+Private Function IsHeaderValueValid(headerValue As String) As Boolean
+    IsHeaderValueValid = (headerValue <> "")
+End Function
+
+' Function to dynamically search for header row in specified column
+Private Function FindHeaderRowForColumn(worksheetTarget As Worksheet, columnLetter As String) As Long
+    Dim checkRowNumber As Long
+    Dim cellValueContent As String
+    Dim maxCheckRows As Long
+    
+    ' Search up to maximum 20 rows
+    maxCheckRows = 20
+    
+    For checkRowNumber = 1 To maxCheckRows
+        cellValueContent = GetMergedCellValue(worksheetTarget, columnLetter & checkRowNumber)
+        
+        ' Check if string looks like a header
+        If IsHeaderLikeValue(cellValueContent) Then
+            FindHeaderRowForColumn = checkRowNumber
+            Exit Function
+        End If
+    Next checkRowNumber
+    
+    ' Return 0 if no header found
+    FindHeaderRowForColumn = 0
+End Function
+
+' Function to check if value looks like a header
+Private Function IsHeaderLikeValue(valueInput As String) As Boolean
+    Select Case True
+        Case valueInput = ""
+            IsHeaderLikeValue = False
+        Case IsNumeric(valueInput)
+            IsHeaderLikeValue = False
+        Case Len(Trim(valueInput)) < 2
+            IsHeaderLikeValue = False
+        Case Else
+            IsHeaderLikeValue = True
+    End Select
+End Function
+
+
+
+' ファイルの行数を取得する関数
+Public Function GetFileRowCount(fileObj As Object) As Long
+    GetFileRowCount = 0
+    
+    If IsExcelFileForExtraction(fileObj) = False Then
+        Exit Function
+    End If
+    
+    GetFileRowCount = CalculateFileRowCount(fileObj)
+End Function
+
+' Excelファイルかどうかをチェックする関数（抽出用）
+Private Function IsExcelFileForExtraction(fileObj As Object) As Boolean
+    Dim fileExtension As String
+    fileExtension = GetFileExtension(fileObj.Name)
+    
+    Select Case fileExtension
+        Case ".xls", "xlsx"
+            IsExcelFileForExtraction = True
+        Case Else
+            IsExcelFileForExtraction = False
+    End Select
+End Function
+
+' ファイル拡張子を取得する関数
+Private Function GetFileExtension(fileName As String) As String
+    If Len(fileName) >= 5 And Right(fileName, 5) = ".xlsx" Then
+        GetFileExtension = "xlsx"
+    Else
+        GetFileExtension = Right(fileName, 4)
+    End If
+End Function
+
+' ファイルの行数を計算する関数
+Private Function CalculateFileRowCount(fileObj As Object) As Long
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    
+    On Error GoTo ErrorHandler
+    
+    Set wb = OpenWorkbookInBackground(fileObj.Path)
+    
+    ' ワークブックが正常に開けたかチェック
+    If wb Is Nothing Then
+        CalculateFileRowCount = 0
+        GoTo CleanUp
+    End If
+    
+    ' 最初のワークシートを取得
+    If wb.Worksheets.Count > 0 Then
+        Set ws = wb.Worksheets(1)
+    Else
+        CalculateFileRowCount = 0
+        GoTo CleanUp
+    End If
+    
+    lastRow = GetMaxRowFromColumns(ws)
+    
+    ' Calculate data row count dynamically
+    Dim dataStartRow As Long
+    dataStartRow = FindDataStartRowInFixedColumns(ws, riskItemColumnAddress, dangerStateColumnAddress, harmColumnAddress, severityLevelColumnAddress)
+    
+    If lastRow >= dataStartRow Then
+        CalculateFileRowCount = lastRow - dataStartRow + 1
+        Debug.Print "データ行数計算: 最終行" & lastRow & " - 開始行" & dataStartRow & " + 1 = " & CalculateFileRowCount
+    Else
+        CalculateFileRowCount = 0
+    End If
+    
+CleanUp:
+    If Not wb Is Nothing Then
+        Call SafeCloseWorkbook(wb)
+    End If
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "CalculateFileRowCount でエラー: " & Err.Description & " (ファイル: " & fileObj.Name & ")"
+    CalculateFileRowCount = 0
+    GoTo CleanUp
+End Function
+
+' Function to get maximum row count from each column
+Private Function GetMaxRowFromColumns(worksheetTarget As Worksheet) As Long
+    Dim lastRowA As Long, lastRowB As Long, lastRowC As Long, lastRowD As Long
+    
+    On Error GoTo ErrorHandler
+    
+    ' Safely get last row of each column (A, B, C, D)
+    lastRowA = GetLastRowInColumn(worksheetTarget, riskItemColumnAddress)
+    lastRowB = GetLastRowInColumn(worksheetTarget, dangerStateColumnAddress)
+    lastRowC = GetLastRowInColumn(worksheetTarget, harmColumnAddress)
+    lastRowD = GetLastRowInColumn(worksheetTarget, severityLevelColumnAddress)
+    
+    GetMaxRowFromColumns = Application.WorksheetFunction.Max(lastRowA, lastRowB, lastRowC, lastRowD)
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "GetMaxRowFromColumns Error: " & Err.Description
+    GetMaxRowFromColumns = 1
+End Function
+
+' 指定列の最終行を安全に取得する関数
+Private Function GetLastRowInColumn(ws As Worksheet, columnLetter As String) As Long
+    On Error GoTo ErrorHandler
+    
+    ' ワークシートが有効かチェック
+    If ws Is Nothing Then
+        GetLastRowInColumn = 1
+        Exit Function
+    End If
+    
+    ' 列が有効な範囲内かチェック（A～XFD）
+    If Not IsValidColumnLetter(columnLetter) Then
+        Debug.Print "無効な列文字: " & columnLetter
+        GetLastRowInColumn = 1
+        Exit Function
+    End If
+    
+    ' より安全な方法で最終行を取得
+    GetLastRowInColumn = GetSafeLastRow(ws, columnLetter)
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "列 " & columnLetter & " の最終行取得でエラー: " & Err.Description
+    ' エラーの場合はUsedRangeから推定
+    GetLastRowInColumn = GetLastRowFromUsedRange(ws)
+End Function
+
+' より安全な最終行取得方法
+Private Function GetSafeLastRow(ws As Worksheet, columnLetter As String) As Long
+    On Error GoTo ErrorHandler
+    
+    ' 最初にUsedRangeからの推定を試行（より安全）
+    Dim usedRangeLastRow As Long
+    usedRangeLastRow = GetLastRowFromUsedRange(ws)
+    
+    ' 指定列に実際にデータがあるかチェック（UsedRange範囲内で）
+    Dim actualLastRow As Long
+    actualLastRow = FindLastRowInColumnRange(ws, columnLetter, usedRangeLastRow)
+    
+    ' より大きい値を採用
+    GetSafeLastRow = Application.WorksheetFunction.Max(actualLastRow, usedRangeLastRow)
+    
+    Debug.Print "列 " & columnLetter & " の最終行: UsedRange=" & usedRangeLastRow & ", 実際=" & actualLastRow & ", 採用=" & GetSafeLastRow
+    Exit Function
+    
+ErrorHandler:
+    ' エラーの場合はUsedRangeから推定
+    GetSafeLastRow = GetLastRowFromUsedRange(ws)
+    Debug.Print "列 " & columnLetter & " でエラー、UsedRangeを使用: " & GetSafeLastRow
+End Function
+
+' 指定された範囲内で列の最終行を検索する関数（結合セル対応）
+Private Function FindLastRowInColumnRange(ws As Worksheet, columnLetter As String, maxRow As Long) As Long
+    Dim i As Long
+    Dim cellValue As String
+    
+    On Error GoTo ErrorHandler
+    
+    ' AS列やAZ列の場合は検索範囲を拡大して詳細チェック
+    If columnLetter = "AS" Or columnLetter = "AZ" Then
+        Debug.Print "遠距離列 " & columnLetter & " の最終行検索開始（最大行:" & maxRow & "）"
+        
+        ' より広範囲で検索（最大500行まで）
+        Dim expandedMaxRow As Long
+        expandedMaxRow = Application.WorksheetFunction.Max(maxRow, 500)
+        
+        For i = expandedMaxRow To 1 Step -1
+            cellValue = GetMergedCellValue(ws, columnLetter & i)
+            If cellValue <> "" Then
+                Debug.Print "★遠距離列 " & columnLetter & " でデータ発見（行" & i & "）: [" & Left(cellValue, 50) & "]"
+                FindLastRowInColumnRange = i
+                Exit Function
+            End If
+            
+            ' 100行ごとに進捗表示
+            If i Mod 100 = 0 Then
+                Debug.Print "遠距離列 " & columnLetter & " 検索中: 行" & i
+            End If
+        Next i
+        
+        Debug.Print "遠距離列 " & columnLetter & " でデータが見つかりませんでした"
+    Else
+        ' 通常の列の処理
+        For i = maxRow To 1 Step -1
+            cellValue = GetMergedCellValue(ws, columnLetter & i)
+            If cellValue <> "" Then
+                FindLastRowInColumnRange = i
+                Debug.Print "列 " & columnLetter & " でデータ発見（行" & i & "）: " & Left(cellValue, 20)
+                Exit Function
+            End If
+        Next i
+    End If
+    
+    FindLastRowInColumnRange = 1
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindLastRowInColumnRange エラー(" & columnLetter & "): " & Err.Description
+    FindLastRowInColumnRange = 1
+End Function
+
+' UsedRangeから最終行を推定する関数
+Private Function GetLastRowFromUsedRange(ws As Worksheet) As Long
+    On Error GoTo ErrorHandler
+    
+    If ws.UsedRange Is Nothing Then
+        GetLastRowFromUsedRange = 1
+    Else
+        Dim lastRow As Long
+        lastRow = ws.UsedRange.Rows.Count + ws.UsedRange.Row - 1
+        
+        ' 最低でも50行はチェック（データが存在する可能性を考慮）
+        If lastRow < 50 Then
+            lastRow = 50
+        End If
+        
+        GetLastRowFromUsedRange = lastRow
+        Debug.Print "UsedRange最終行: " & (ws.UsedRange.Rows.Count + ws.UsedRange.Row - 1) & " → 採用: " & lastRow
+    End If
+    Exit Function
+    
+ErrorHandler:
+    GetLastRowFromUsedRange = 50
+End Function
+
+' 列文字が有効かチェックする関数
+Private Function IsValidColumnLetter(columnLetter As String) As Boolean
+    On Error GoTo ErrorHandler
+    
+    ' 空文字チェック
+    If columnLetter = "" Then
+        IsValidColumnLetter = False
+        Exit Function
+    End If
+    
+    ' 列番号に変換してみる（エラーが発生しなければ有効）
+    Dim colNum As Long
+    colNum = Range(columnLetter & "1").Column
+    IsValidColumnLetter = True
+    Exit Function
+    
+ErrorHandler:
+    IsValidColumnLetter = False
+End Function
+
+' ファイルからヘッダー情報を取得する関数（キーワード検索結果を使用）
+Public Function GetFileHeaders(fileObj As Object, Optional searchResult As Object = Nothing) As Variant
+    Dim headers(1 To 4) As String
+    
+    If IsExcelFileForExtraction(fileObj) = False Then
+        GetFileHeaders = headers
+        Exit Function
+    End If
+    
+    ' 検索結果が提供された場合は、それを使用してヘッダーを取得
+    If Not searchResult Is Nothing Then
+        GetFileHeaders = ExtractHeadersFromSearchResult(fileObj, searchResult)
+    Else
+        ' 従来の固定列方式（B,F,G,H）
+        GetFileHeaders = ExtractHeadersFromFile(fileObj)
+    End If
+End Function
+
+' 検索結果を基にヘッダーを取得する関数
+Private Function ExtractHeadersFromSearchResult(fileObj As Object, searchResult As Object) As Variant
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim headers(1 To 4) As String
+    Dim sheetResult As Object
+    Dim riskColumn As String, dangerColumn As String, harmColumn As String, severityColumn As String
+    
+    On Error GoTo ErrorHandler
+    
+    ' 画面更新を停止
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    Set wb = Workbooks.Open(fileObj.Path, UpdateLinks:=0, ReadOnly:=True)
+    
+    If wb Is Nothing Then
+        ExtractHeadersFromSearchResult = headers
+        GoTo CleanUp
+    End If
+    
+    wb.Windows(1).Visible = False
+    
+    ' 検索結果から最初の有効なシート結果を取得
+    If searchResult.Count > 0 Then
+        Set sheetResult = searchResult(1)
+        Set ws = wb.Worksheets(sheetResult("sheetName"))
+        
+        ' 各キーワードが見つかった列を特定
+        riskColumn = GetColumnFromAddress(sheetResult("riskItemNoAddress"))
+        dangerColumn = GetColumnFromAddress(sheetResult("dangerStateAddress"))
+        harmColumn = GetColumnFromAddress(sheetResult("harmAddress"))
+        severityColumn = GetColumnFromAddress(sheetResult("severityLevelAddress"))
+        
+        ' 各列の実際のヘッダーを動的に取得
+        headers(1) = GetDynamicColumnHeader(ws, sheetResult("riskItemNoAddress"), "リスク項目No.")
+        headers(2) = GetDynamicColumnHeader(ws, sheetResult("dangerStateAddress"), "危険状態")
+        headers(3) = GetDynamicColumnHeader(ws, sheetResult("harmAddress"), "危害")
+        headers(4) = GetDynamicColumnHeader(ws, sheetResult("severityLevelAddress"), "重大さレベル")
+        
+        Debug.Print "動的ヘッダー取得結果:"
+        Debug.Print "  " & riskColumn & "列: " & headers(1)
+        Debug.Print "  " & dangerColumn & "列: " & headers(2)
+        Debug.Print "  " & harmColumn & "列: " & headers(3)
+        Debug.Print "  " & severityColumn & "列: " & headers(4)
+    End If
+    
+CleanUp:
+    If Not wb Is Nothing Then
+        Call SafeCloseWorkbook(wb)
+    End If
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    
+    ExtractHeadersFromSearchResult = headers
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "ExtractHeadersFromSearchResult でエラー: " & Err.Description
+    GoTo CleanUp
+End Function
+
+' アドレスから列文字を取得する関数
+Private Function GetColumnFromAddress(cellAddress As String) As String
+    Dim i As Long
+    Dim char As String
+    
+    GetColumnFromAddress = ""
+    
+    ' $記号を除去
+    cellAddress = Replace(cellAddress, "$", "")
+    
+    ' 数字が出現するまでの文字を取得（列文字部分）
+    For i = 1 To Len(cellAddress)
+        char = Mid(cellAddress, i, 1)
+        If IsNumeric(char) Then
+            Exit For
+        Else
+            GetColumnFromAddress = GetColumnFromAddress & char
+        End If
+    Next i
+End Function
+
+' ファイルからヘッダーを抽出する関数
+Private Function ExtractHeadersFromFile(fileObj As Object) As Variant
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim headers(1 To 4) As String
+    
+    On Error GoTo ErrorHandler
+    
+    ' 画面更新を停止
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    Set wb = Workbooks.Open(fileObj.Path, UpdateLinks:=0, ReadOnly:=True)
+    
+    ' ワークブックが正常に開けたかチェック
+    If wb Is Nothing Then
+        ExtractHeadersFromFile = headers
+        GoTo CleanUp
+    End If
+    
+    wb.Windows(1).Visible = False
+    
+    ' 最初のワークシートを取得
+    If wb.Worksheets.Count > 0 Then
+        Set ws = wb.Worksheets(1)
+    Else
+        ExtractHeadersFromFile = headers
+        GoTo CleanUp
+    End If
+    
+    ' Get header for each column (A, B, C, D)
+    headers(1) = GetColumnHeader(ws, riskItemColumnAddress)
+    headers(2) = GetColumnHeader(ws, dangerStateColumnAddress)
+    headers(3) = GetColumnHeader(ws, harmColumnAddress)
+    headers(4) = GetColumnHeader(ws, severityLevelColumnAddress)
+    
+CleanUp:
+    If Not wb Is Nothing Then
+        Call SafeCloseWorkbook(wb)
+    End If
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    
+    ExtractHeadersFromFile = headers
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "ExtractHeadersFromFile でエラー: " & Err.Description & " (ファイル: " & fileObj.Name & ")"
+    GoTo CleanUp
+End Function
+
+' 全ファイルからデータを抽出する関数
+Public Function ExtractAllFilesData(selectedFiles As Collection) As Variant
+    Dim extractedData As Object
+    Dim fileObj As Object
+    Dim i As Long
+    Dim fileData As Variant
+    Dim headers As Variant
+    
+    ' データを格納するDictionaryオブジェクトを作成
+    Set extractedData = CreateObject("Scripting.Dictionary")
+    
+    If selectedFiles Is Nothing Or selectedFiles.Count = 0 Then
+        Set ExtractAllFilesData = extractedData
+        Exit Function
+    End If
+    
+    ' 各ファイルからデータを抽出
+    For i = 1 To selectedFiles.Count
+        Set fileObj = selectedFiles(i)
+        
+        ' ファイルデータを取得
+        Set fileData = ExtractSingleFileData(fileObj)
+        
+        ' Dictionaryに追加
+        extractedData.Add "File" & i, fileData
+        
+        Debug.Print "抽出完了: " & fileObj.Name
+    Next i
+    
+    Set ExtractAllFilesData = extractedData
+End Function
+
+' 単一ファイルからデータを抽出する関数
+Public Function ExtractSingleFileData(fileObj As Object) As Variant
+    Dim fileData As Object
+    Set fileData = CreateObject("Scripting.Dictionary")
+    
+    If IsExcelFileForExtraction(fileObj) = False Then
+        Set ExtractSingleFileData = fileData
+        Exit Function
+    End If
+    
+    Set ExtractSingleFileData = ProcessSingleFileExtraction(fileObj)
+End Function
+
+' 単一ファイルの抽出処理を実行する関数（キーワード検索対応）
+Private Function ProcessSingleFileExtraction(fileObj As Object) As Variant
+    Dim fileData As Object
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim dataCollection As Collection
+    Dim headers As Variant
+    
+    On Error GoTo ErrorHandler
+    
+    Set fileData = CreateObject("Scripting.Dictionary")
+    Set dataCollection = New Collection
+    
+    ' 画面更新を停止
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    ' ワークブック変数を初期化
+    Set wb = Nothing
+    
+    ' キーワード検索を実行（ファイルを開く前）
+    Dim searchResults As Collection
+    Set searchResults = FindKeywordsInFile(fileObj)
+    
+    ' 検索結果がある場合のみファイルを開く
+    If searchResults.Count > 0 Then
+        Debug.Print "キーワード検索成功、ファイルを開きます: " & fileObj.Name
+        
+        Set wb = OpenWorkbookInBackground(fileObj.Path)
+        
+        ' ワークブックが正常に開けたかチェック
+        If wb Is Nothing Then
+            Debug.Print "ワークブックを開けませんでした: " & fileObj.Name
+            Set ProcessSingleFileExtraction = fileData
+            GoTo CleanUp
+        End If
+        
+        ' 複数シート対応：すべての有効なシートからデータを抽出
+        Debug.Print "=== 複数シート処理開始 ==="
+        Debug.Print "  検出されたシート数: " & searchResults.Count
+        
+        Dim allSheetData As Collection
+        Set allSheetData = New Collection
+        
+        Dim sheetResult As Object
+        Dim sheetIndex As Long
+        
+        ' 各シートからデータを抽出
+        For sheetIndex = 1 To searchResults.Count
+            Set sheetResult = searchResults(sheetIndex)
+            
+            Debug.Print "  シート " & sheetIndex & " 処理開始: " & sheetResult("sheetName")
+            
+            Dim targetSheetName As String
+            targetSheetName = sheetResult("sheetName")
+            
+            ' 特定したシートを取得
+            Set ws = GetWorksheetByName(wb, targetSheetName)
+            
+            If Not ws Is Nothing Then
+                ' ワークシートアクセス可能性を確認
+                If IsWorksheetAccessible(ws) Then
+                    Debug.Print "    シートアクセス可能: " & ws.Name
+                    
+                    ' このシートからデータを抽出
+                    Dim sheetDataCollection As Collection
+                    Set sheetDataCollection = ExtractDataFromSheet(ws, sheetResult)
+                    
+                    ' 抽出されたデータを全体コレクションに追加
+                    If Not sheetDataCollection Is Nothing Then
+                        Dim dataItem As Variant
+                        For Each dataItem In sheetDataCollection
+                            allSheetData.Add dataItem
+                        Next dataItem
+                        Debug.Print "    シート " & ws.Name & " から " & sheetDataCollection.Count & " 行のデータを抽出"
+                    End If
+                Else
+                    Debug.Print "    シートアクセス不可: " & targetSheetName
+                End If
+            Else
+                Debug.Print "    シートが見つかりません: " & targetSheetName
+            End If
+        Next sheetIndex
+        
+        ' 全シートからのデータをメインコレクションに設定
+        Set dataCollection = allSheetData
+        Debug.Print "  全シート合計データ行数: " & dataCollection.Count
+        
+        ' ヘッダー情報を最初のシート結果から設定（元ファイルの言語に合わせて）
+        If searchResults.Count > 0 Then
+            Dim firstResult As Object
+            Set firstResult = searchResults(1)
+            
+            ' 最初の有効なシートを取得してヘッダーを取得
+            Dim firstValidSheet As Worksheet
+            Set firstValidSheet = GetWorksheetByName(wb, firstResult("sheetName"))
+            
+            Dim tempHeaders(1 To 4) As String
+            If Not firstValidSheet Is Nothing Then
+                ' 実際のセル値からヘッダーを取得
+                tempHeaders(1) = GetActualHeaderValue(firstValidSheet, firstResult("riskItemNoAddress"))
+                tempHeaders(2) = GetActualHeaderValue(firstValidSheet, firstResult("dangerStateAddress"))
+                tempHeaders(3) = GetActualHeaderValue(firstValidSheet, firstResult("harmAddress"))
+                tempHeaders(4) = GetActualHeaderValue(firstValidSheet, firstResult("severityLevelAddress"))
+            Else
+                ' フォールバック：デフォルト英語ヘッダー
+                tempHeaders(1) = "No."
+                tempHeaders(2) = "Hazardous Situation"
+                tempHeaders(3) = "Harm"
+                tempHeaders(4) = "Risk Level"
+            End If
+            
+            fileData.Add "Headers", tempHeaders
+            
+            Debug.Print "  動的ヘッダー設定完了:"
+            Debug.Print "    Header1: " & tempHeaders(1)
+            Debug.Print "    Header2: " & tempHeaders(2)
+            Debug.Print "    Header3: " & tempHeaders(3)
+            Debug.Print "    Header4: " & tempHeaders(4)
+        End If
+    Else
+        Debug.Print "必要なキーワードが見つからないため、ファイルをスキップします: " & fileObj.Name
+    End If
+    
+    ' ファイル情報を追加
+    fileData.Add "Data", dataCollection
+    fileData.Add "FileName", fileObj.Name
+    fileData.Add "FilePath", fileObj.Path
+    
+CleanUp:
+    If Not wb Is Nothing Then
+        Call SafeCloseWorkbook(wb)
+        Set wb = Nothing
+    End If
+    Call RestoreExcelVisibility
+    
+    Set ProcessSingleFileExtraction = fileData
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "ProcessSingleFileExtraction でエラー: " & Err.Description & " (ファイル: " & fileObj.Name & ")"
+    GoTo CleanUp
+End Function
+
+' データ行が利用可能かチェックする関数（動的）
+Private Function IsDataRowsAvailable(lastRow As Long) As Boolean
+    ' 最終行が十分に大きい値であればデータが存在する可能性がある
+    IsDataRowsAvailable = (lastRow > 1)
+End Function
+
+' データ行を抽出する関数（動的列対応）
+Private Function ExtractDataRows(ws As Worksheet, lastRow As Long, Optional searchResult As Object = Nothing) As Collection
+    Dim dataCollection As Collection
+    Dim dataRow As Long
+    Dim rowData(1 To 4) As Variant
+    Dim riskColumn As String, dangerColumn As String, harmColumn As String, severityColumn As String
+    Dim startRow As Long
+    
+    Set dataCollection = New Collection
+    
+    ' ワークシートアクセス可能性を事前確認
+    If Not IsWorksheetAccessible(ws) Then
+        Debug.Print "ExtractDataRows: ワークシートアクセス不可"
+        Set ExtractDataRows = dataCollection
+        Exit Function
+    End If
+    
+    ' Use dynamic columns from keyword search results
+    Debug.Print "=== ExtractDataRows: searchResult condition check ==="
+    Debug.Print "  searchResult Is Nothing: " & (searchResult Is Nothing)
+    Debug.Print "  TypeName(searchResult): " & TypeName(searchResult)
+    
+    If Not searchResult Is Nothing Then
+        Debug.Print "=== ExtractDataRows: SearchResult内容確認 ==="
+        Debug.Print "  riskItemNoAddress: " & searchResult("riskItemNoAddress")
+        Debug.Print "  dangerStateAddress: " & searchResult("dangerStateAddress") 
+        Debug.Print "  harmAddress: " & searchResult("harmAddress")
+        Debug.Print "  severityLevelAddress: " & searchResult("severityLevelAddress")
+        
+        riskColumn = GetColumnFromAddress(searchResult("riskItemNoAddress"))
+        dangerColumn = GetColumnFromAddress(searchResult("dangerStateAddress"))
+        harmColumn = GetColumnFromAddress(searchResult("harmAddress"))
+        severityColumn = GetColumnFromAddress(searchResult("severityLevelAddress"))
+        
+        ' キーワードが見つかった位置から動的にデータ開始行を決定
+        Dim keywordRow As Long
+        keywordRow = GetRowFromAddress(searchResult("riskItemNoAddress"))
+        
+        ' 列の正当性を確認（特に危害と重大さレベル）
+        Debug.Print "=== 検索結果から取得した列情報 ==="
+        Debug.Print "リスク項目No.: " & riskColumn & " (" & searchResult("riskItemNoAddress") & ")"
+        Debug.Print "危険状態: " & dangerColumn & " (" & searchResult("dangerStateAddress") & ")"
+        Debug.Print "危害: " & harmColumn & " (" & searchResult("harmAddress") & ")"
+        Debug.Print "重大さレベル: " & severityColumn & " (" & searchResult("severityLevelAddress") & ")"
+        
+        ' 正しい列を再確認
+        Call ValidateExtractedColumns(ws, keywordRow, harmColumn, severityColumn)
+        
+        ' キーワード行の次の行から実際のデータがある行を探す
+        startRow = FindActualDataStartRow(ws, keywordRow, riskColumn, dangerColumn, harmColumn, severityColumn)
+        
+        Debug.Print "データ抽出設定 - キーワード行: " & keywordRow & ", 動的開始行: " & startRow & ", 最終行: " & lastRow
+        Debug.Print "使用列 - リスク:" & riskColumn & ", 危険:" & dangerColumn & ", 危害:" & harmColumn & ", 重大さ:" & severityColumn
+    Else
+        Debug.Print "=== Fixed column approach selected (searchResult is Nothing) ==="
+        ' Use predefined column addresses for fixed column approach
+        riskColumn = riskItemColumnAddress        ' A column
+        dangerColumn = dangerStateColumnAddress   ' B column
+        harmColumn = harmColumnAddress           ' C column
+        severityColumn = severityLevelColumnAddress ' D column
+        
+        Debug.Print "=== Fixed column constants ==="
+        Debug.Print "  riskItemColumnAddress: " & riskItemColumnAddress
+        Debug.Print "  dangerStateColumnAddress: " & dangerStateColumnAddress
+        Debug.Print "  harmColumnAddress: " & harmColumnAddress
+        Debug.Print "  severityLevelColumnAddress: " & severityLevelColumnAddress
+        
+        ' Find data start row dynamically even with fixed columns
+        startRow = FindDataStartRowInFixedColumns(ws, riskColumn, dangerColumn, harmColumn, severityColumn)
+        Debug.Print "Fixed column data extraction: Dynamic start row " & startRow & ", Last row: " & lastRow
+    End If
+    
+    ' データ行が存在するかの事前チェック
+    If lastRow < startRow Then
+        Debug.Print "データ行が存在しません (最終行:" & lastRow & " < 開始行:" & startRow & ")"
+        Set ExtractDataRows = dataCollection
+        Exit Function
+    End If
+    
+    ' データ抽出前にワークシート状態を最終確認
+    If Not IsWorksheetAccessible(ws) Then
+        Debug.Print "データ抽出直前：ワークシートアクセス失敗"
+        Set ExtractDataRows = dataCollection
+        Exit Function
+    End If
+    
+    Debug.Print "データ抽出開始：範囲 " & startRow & " から " & lastRow & " まで"
+    Debug.Print "=== 実際の使用列確認 ==="
+    Debug.Print "  riskColumn: " & riskColumn
+    Debug.Print "  dangerColumn: " & dangerColumn  
+    Debug.Print "  harmColumn: " & harmColumn
+    Debug.Print "  severityColumn: " & severityColumn
+    
+    ' データ行を抽出（安全な範囲で）
+    Dim maxSafeRow As Long
+    maxSafeRow = Application.WorksheetFunction.Min(lastRow, startRow + 100)  ' 最大100行まで
+    
+    For dataRow = startRow To maxSafeRow
+        ' ワークシートアクセス可能性を各行でチェック
+        If Not IsWorksheetAccessible(ws) Then
+            Debug.Print "行" & dataRow & "でワークシートアクセス失敗、処理中断"
+            Exit For
+        End If
+        
+        rowData(1) = GetMergedCellValue(ws, riskColumn & dataRow)
+        rowData(2) = GetMergedCellValue(ws, dangerColumn & dataRow)
+        rowData(3) = GetMergedCellValue(ws, harmColumn & dataRow)
+        rowData(4) = GetMergedCellValue(ws, severityColumn & dataRow)
+        
+        ' デバッグ用：最初の10行は常に内容を出力
+        If dataRow <= startRow + 9 Then
+            Debug.Print "行" & dataRow & "内容: [" & riskColumn & "=" & rowData(1) & "][" & dangerColumn & "=" & rowData(2) & "][" & harmColumn & "=" & rowData(3) & "][" & severityColumn & "=" & rowData(4) & "]"
+            
+            ' 重大さレベルの詳細チェック
+            If rowData(4) <> "" Then
+                If IsNumeric(rowData(4)) Then
+                    Dim severityNum As Double
+                    severityNum = CDbl(rowData(4))
+                    If severityNum >= 1 And severityNum <= 5 Then
+                        Debug.Print "  → 重大さレベル正常: " & severityNum
+                    Else
+                        Debug.Print "  → 重大さレベル範囲外: " & severityNum
+                    End If
+                Else
+                    Debug.Print "  → 重大さレベル非数値: [" & rowData(4) & "]"
+                End If
+            End If
+        End If
+        
+        ' ヘッダー行かどうかをチェック（キーワードが含まれている行はスキップ）
+        If IsHeaderRow(rowData) Then
+            Debug.Print "ヘッダー行をスキップ: 行" & dataRow
+        ElseIf Not IsAllRowDataEmpty(rowData) Then
+            ' データの品質をチェック
+            If IsValidDataRow(rowData) Then
+                dataCollection.Add rowData
+                Debug.Print "★データ追加: 行" & dataRow & " → コレクション件数: " & dataCollection.Count
+            Else
+                Debug.Print "品質チェック失敗、行をスキップ: 行" & dataRow
+            End If
+        End If
+    Next dataRow
+    
+    Debug.Print "抽出されたデータ行数: " & dataCollection.Count
+    Set ExtractDataRows = dataCollection
+End Function
+
+' 実際のデータ開始行を動的に見つける関数
+Private Function FindActualDataStartRow(ws As Worksheet, keywordRow As Long, riskCol As String, dangerCol As String, harmCol As String, severityCol As String) As Long
+    Dim checkRow As Long
+    Dim maxCheckRows As Long
+    Dim hasData As Boolean
+    Dim cellValue1 As String, cellValue2 As String, cellValue3 As String, cellValue4 As String
+    
+    ' ワークシートアクセス可能性を事前確認
+    If Not IsWorksheetAccessible(ws) Then
+        Debug.Print "FindActualDataStartRow: ワークシートアクセス不可"
+        FindActualDataStartRow = keywordRow + 2
+        Exit Function
+    End If
+    
+    ' キーワード行の次の行から最大5行先まで検索（範囲を狭める）
+    maxCheckRows = 5
+    
+    Debug.Print "データ開始行検索: キーワード行" & keywordRow & "の次の行から" & maxCheckRows & "行先まで検索"
+    Debug.Print "使用列: " & riskCol & ", " & dangerCol & ", " & harmCol & ", " & severityCol
+    
+    ' AS列とAZ列へのアクセステストと実データ検索
+    If (harmCol = "AS" Or severityCol = "AZ") And IsWorksheetAccessible(ws) Then
+        Debug.Print "=== AS/AZ列直接アクセステスト開始 ==="
+        Call TestDirectAccessToDistantColumns(ws, keywordRow)
+        
+        ' 実際のデータ列を再検証する
+        Debug.Print "=== 列内容の再検証 ==="
+        Call VerifyColumnContent(ws, keywordRow, harmCol, severityCol)
+        
+        ' AS/AZ列で実際のデータが存在する行を広範囲で検索
+        Dim dataFoundRow As Long
+        dataFoundRow = FindDataInDistantColumns(ws, harmCol, severityCol, keywordRow)
+        If dataFoundRow > 0 Then
+            Debug.Print "★AS/AZ列でデータ発見: 行" & dataFoundRow
+            FindActualDataStartRow = dataFoundRow
+            Exit Function
+        End If
+        Debug.Print "=== AS/AZ列直接アクセステスト終了 ==="
+    End If
+    
+    For checkRow = keywordRow + 1 To keywordRow + maxCheckRows
+        ' ワークシートアクセス可能性を各行でチェック
+        If Not IsWorksheetAccessible(ws) Then
+            Debug.Print "行" & checkRow & "でワークシートアクセス失敗、検索中断"
+            Exit For
+        End If
+        
+        hasData = False
+        
+        ' 各列の値を取得してデバッグ出力
+        cellValue1 = GetMergedCellValue(ws, riskCol & checkRow)
+        cellValue2 = GetMergedCellValue(ws, dangerCol & checkRow)
+        cellValue3 = GetMergedCellValue(ws, harmCol & checkRow)
+        cellValue4 = GetMergedCellValue(ws, severityCol & checkRow)
+        
+        Debug.Print "行" & checkRow & "チェック: [" & riskCol & "=" & cellValue1 & "][" & dangerCol & "=" & cellValue2 & "][" & harmCol & "=" & cellValue3 & "][" & severityCol & "=" & cellValue4 & "]"
+        
+        ' いずれかの列に実際のデータ（キーワード以外）があるかチェック
+        If hasActualData(ws, riskCol & checkRow) Then hasData = True
+        If hasActualData(ws, dangerCol & checkRow) Then hasData = True
+        If hasActualData(ws, harmCol & checkRow) Then hasData = True
+        If hasActualData(ws, severityCol & checkRow) Then hasData = True
+        
+        If hasData Then
+            Debug.Print "★実際のデータ開始行を発見: " & checkRow
+            FindActualDataStartRow = checkRow
+            Exit Function
+        End If
+    Next checkRow
+    
+    ' データが見つからない場合はキーワード行の2行後をデフォルトとする
+    FindActualDataStartRow = keywordRow + 2
+    Debug.Print "データ開始行が見つからないため、デフォルト行を使用: " & FindActualDataStartRow
+End Function
+
+' AS列とAZ列への直接アクセステスト関数
+Private Sub TestDirectAccessToDistantColumns(ws As Worksheet, keywordRow As Long)
+    Dim testRow As Long
+    Dim testValue As String
+    Dim testRange As Range
+    Dim asColNum As Long, azColNum As Long
+    
+    On Error GoTo ErrorHandler
+    
+    ' ワークシートアクセス可能性を事前確認
+    If Not IsWorksheetAccessible(ws) Then
+        Debug.Print "TestDirectAccessToDistantColumns: ワークシートアクセス不可"
+        Exit Sub
+    End If
+    
+    Debug.Print "AS/AZ列テスト開始 - ワークシート: " & ws.Name
+    
+    ' AS列とAZ列の列番号を安全に取得
+    On Error Resume Next
+    asColNum = 45  ' AS列
+    azColNum = 52  ' AZ列
+    On Error GoTo ErrorHandler
+    
+    Debug.Print "列番号: AS=" & asColNum & ", AZ=" & azColNum
+    
+    ' キーワード行周辺をテスト（範囲を狭める）
+    For testRow = keywordRow To keywordRow + 5
+        Debug.Print "=== 行" & testRow & "のテスト ==="
+        
+        ' AS列テスト（Cells方式のみ、より安全）
+        On Error Resume Next
+        testValue = ""
+        If IsWorksheetAccessible(ws) Then
+            testValue = SafeStringConvert(ws.Cells(testRow, asColNum).value)
+            Debug.Print "AS" & testRow & " 値: [" & testValue & "]"
+        End If
+        On Error GoTo ErrorHandler
+        
+        ' AZ列テスト（Cells方式のみ、より安全）
+        On Error Resume Next
+        testValue = ""
+        If IsWorksheetAccessible(ws) Then
+            testValue = SafeStringConvert(ws.Cells(testRow, azColNum).value)
+            Debug.Print "AZ" & testRow & " 値: [" & testValue & "]"
+        End If
+        On Error GoTo ErrorHandler
+        
+        ' B列とF列も同様にテスト（比較用）
+        On Error Resume Next
+        If IsWorksheetAccessible(ws) Then
+            testValue = SafeStringConvert(ws.Cells(testRow, 2).value)  ' B列
+            Debug.Print "B" & testRow & " 値: [" & testValue & "]"
+            testValue = SafeStringConvert(ws.Cells(testRow, 6).value)  ' F列
+            Debug.Print "F" & testRow & " 値: [" & testValue & "]"
+        End If
+        On Error GoTo ErrorHandler
+    Next testRow
+    
+    Debug.Print "AS/AZ列テスト完了"
+    Exit Sub
+    
+ErrorHandler:
+    Debug.Print "TestDirectAccessToDistantColumns エラー: " & Err.Description
+End Sub
+
+' AS列とAZ列で実際のデータがある行を広範囲で検索する関数
+Private Function FindDataInDistantColumns(ws As Worksheet, harmCol As String, severityCol As String, keywordRow As Long) As Long
+    Dim testRow As Long
+    Dim asColNum As Long, azColNum As Long
+    Dim asValue As String, azValue As String
+    Dim maxSearchRow As Long
+    
+    On Error GoTo ErrorHandler
+    
+    ' 列番号を取得
+    asColNum = 45  ' AS列
+    azColNum = 52  ' AZ列
+    
+    ' キーワード行の1行後から最大100行まで検索
+    maxSearchRow = keywordRow + 100
+    
+    Debug.Print "AS/AZ列での実データ検索: 行" & (keywordRow + 1) & "から行" & maxSearchRow & "まで"
+    
+    For testRow = keywordRow + 1 To maxSearchRow
+        ' ワークシートアクセス可能性をチェック
+        If Not IsWorksheetAccessible(ws) Then
+            Debug.Print "行" & testRow & "でワークシートアクセス失敗"
+            Exit For
+        End If
+        
+        ' AS列の値を取得
+        On Error Resume Next
+        asValue = ""
+        If harmCol = "AS" Then
+            asValue = SafeStringConvert(ws.Cells(testRow, asColNum).value)
+        End If
+        
+        ' AZ列の値を取得
+        azValue = ""
+        If severityCol = "AZ" Then
+            azValue = SafeStringConvert(ws.Cells(testRow, azColNum).value)
+        End If
+        On Error GoTo ErrorHandler
+        
+        ' データが見つかった場合
+        If (asValue <> "" And Not IsKeywordValue(asValue)) Or (azValue <> "" And Not IsKeywordValue(azValue)) Then
+            Debug.Print "★実データ発見 行" & testRow & ": AS=[" & asValue & "] AZ=[" & azValue & "]"
+            FindDataInDistantColumns = testRow
+            Exit Function
+        End If
+        
+        ' 10行ごとに進捗表示
+        If testRow Mod 10 = 0 Then
+            Debug.Print "AS/AZ列検索中: 行" & testRow & " AS=[" & asValue & "] AZ=[" & azValue & "]"
+        End If
+    Next testRow
+    
+    Debug.Print "AS/AZ列で実データが見つかりませんでした"
+    FindDataInDistantColumns = 0
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindDataInDistantColumns エラー: " & Err.Description
+    FindDataInDistantColumns = 0
+End Function
+
+' 列の内容を検証して正しいデータ列を特定する関数
+Private Sub VerifyColumnContent(ws As Worksheet, keywordRow As Long, harmCol As String, severityCol As String)
+    Dim i As Long
+    Dim harmColNum As Long, severityColNum As Long
+    Dim testValue As String
+    
+    On Error GoTo ErrorHandler
+    
+    ' 列番号を動的に取得（列文字から）
+    harmColNum = Range(harmCol & "1").Column
+    severityColNum = Range(severityCol & "1").Column
+    
+    Debug.Print "=== " & harmCol & "列（列番号" & harmColNum & "）の内容検証 ==="
+    
+    ' harmCol列の内容を広範囲でチェック
+    For i = keywordRow - 2 To keywordRow + 20
+        testValue = SafeStringConvert(ws.Cells(i, harmColNum).value)
+        If testValue <> "" Then
+            Debug.Print harmCol & i & ": [" & testValue & "]"
+            ' 危害らしい内容かチェック
+            If InStr(testValue, "危害") > 0 Then
+                Debug.Print "→ 危害ヘッダー候補: " & testValue
+            ElseIf Len(testValue) > 5 And Not IsNumeric(testValue) Then
+                Debug.Print "→ 危害データ候補: " & testValue
+            End If
+        End If
+    Next i
+    
+    Debug.Print "=== " & severityCol & "列（列番号" & severityColNum & "）の内容検証 ==="
+    
+    ' severityCol列の内容を広範囲でチェック
+    For i = keywordRow - 2 To keywordRow + 20
+        testValue = SafeStringConvert(ws.Cells(i, severityColNum).value)
+        If testValue <> "" Then
+            Debug.Print severityCol & i & ": [" & testValue & "]"
+            
+            ' 重大さレベルらしい値かチェック
+            If IsNumeric(testValue) Then
+                Dim numValue As Double
+                numValue = CDbl(testValue)
+                If numValue >= 1 And numValue <= 5 Then
+                    Debug.Print "→ 重大さレベル候補: " & testValue
+                Else
+                    Debug.Print "→ 数値だが範囲外: " & testValue
+                End If
+            ElseIf InStr(testValue, "重大") > 0 Or InStr(testValue, "レベル") > 0 Then
+                Debug.Print "→ 重大さレベルヘッダー候補: " & testValue
+            Else
+                Debug.Print "→ 非数値データ: " & testValue
+            End If
+        End If
+    Next i
+    
+    ' 正しい列を再検索
+    Debug.Print "=== 正しい列の再検索 ==="
+    Call FindCorrectColumns(ws, keywordRow)
+    
+    Exit Sub
+    
+ErrorHandler:
+    Debug.Print "VerifyColumnContent エラー: " & Err.Description
+End Sub
+
+' 正しい危害列と重大さレベル列を検索する関数
+Private Sub FindCorrectColumns(ws As Worksheet, keywordRow As Long)
+    Dim col As Long
+    Dim testValue As String
+    Dim harmCol As Long, severityCol As Long
+    
+    On Error GoTo ErrorHandler
+    
+    Debug.Print "全列スキャンで正しい危害・重大さレベル列を検索中..."
+    
+    ' 全列をスキャン（A列から最大100列まで）
+    For col = 1 To 100
+        testValue = SafeStringConvert(ws.Cells(keywordRow, col).value)
+        
+        ' 危害キーワードをチェック
+        If InStr(testValue, "危害") > 0 And InStr(testValue, "重大") = 0 Then
+            harmCol = col
+            Debug.Print "★危害列発見: " & ConvertColumnNumberToLetter(col) & "列（列番号" & col & "） 値=[" & testValue & "]"
+            
+            ' 危害列のデータサンプルを表示
+            Call ShowColumnSample(ws, col, keywordRow, "危害")
+        End If
+        
+        ' 重大さレベルキーワードをチェック
+        If InStr(testValue, "重大さレベル") > 0 Or InStr(testValue, "重大さ") > 0 Then
+            severityCol = col
+            Debug.Print "★重大さレベル列発見: " & ConvertColumnNumberToLetter(col) & "列（列番号" & col & "） 値=[" & testValue & "]"
+            
+            ' 重大さレベル列のデータサンプルを表示
+            Call ShowColumnSample(ws, col, keywordRow, "重大さレベル")
+        End If
+    Next col
+    
+    If harmCol = 0 Then
+        Debug.Print "警告：危害列が見つかりませんでした"
+    End If
+    
+    If severityCol = 0 Then
+        Debug.Print "警告：重大さレベル列が見つかりませんでした"
+    End If
+    
+    Exit Sub
+    
+ErrorHandler:
+    Debug.Print "FindCorrectColumns エラー: " & Err.Description
+End Sub
+
+' 列番号を列文字に変換する関数
+Private Function ConvertColumnNumberToLetter(colNum As Long) As String
+    ConvertColumnNumberToLetter = Split(Cells(1, colNum).Address, "$")(1)
+End Function
+
+' 列のデータサンプルを表示する関数
+Private Sub ShowColumnSample(ws As Worksheet, colNum As Long, keywordRow As Long, columnType As String)
+    Dim i As Long
+    Dim sampleValue As String
+    
+    Debug.Print "=== " & columnType & "列（" & ConvertColumnNumberToLetter(colNum) & "）のデータサンプル ==="
+    
+    For i = keywordRow + 1 To keywordRow + 10
+        sampleValue = SafeStringConvert(ws.Cells(i, colNum).value)
+        If sampleValue <> "" Then
+            Debug.Print ConvertColumnNumberToLetter(colNum) & i & ": [" & sampleValue & "]"
+            
+            ' 重大さレベルの場合は数値チェック
+            If columnType = "重大さレベル" And IsNumeric(sampleValue) Then
+                Dim numVal As Double
+                numVal = CDbl(sampleValue)
+                If numVal >= 1 And numVal <= 5 Then
+                    Debug.Print "  → 正常な重大さレベル値: " & numVal
+                Else
+                    Debug.Print "  → 範囲外の値: " & numVal
+                End If
+            End If
+        End If
+    Next i
+End Sub
+
+' 抽出された列が正しいかを検証する関数
+Private Sub ValidateExtractedColumns(ws As Worksheet, keywordRow As Long, harmColumn As String, severityColumn As String)
+    Dim harmColNum As Long, severityColNum As Long
+    Dim harmHeaderValue As String, severityHeaderValue As String
+    Dim harmDataSample As String, severityDataSample As String
+    Dim i As Long
+    
+    On Error GoTo ErrorHandler
+    
+    Debug.Print "=== 抽出列の検証開始 ==="
+    
+    ' 列番号を取得
+    harmColNum = Range(harmColumn & "1").Column
+    severityColNum = Range(severityColumn & "1").Column
+    
+    ' ヘッダー値を確認
+    harmHeaderValue = SafeStringConvert(ws.Cells(keywordRow, harmColNum).value)
+    severityHeaderValue = SafeStringConvert(ws.Cells(keywordRow, severityColNum).value)
+    
+    Debug.Print "危害列（" & harmColumn & "）ヘッダー: [" & harmHeaderValue & "]"
+    Debug.Print "重大さレベル列（" & severityColumn & "）ヘッダー: [" & severityHeaderValue & "]"
+    
+    ' データサンプルを確認
+    For i = keywordRow + 1 To keywordRow + 5
+        harmDataSample = SafeStringConvert(ws.Cells(i, harmColNum).value)
+        severityDataSample = SafeStringConvert(ws.Cells(i, severityColNum).value)
+        
+        If harmDataSample <> "" Or severityDataSample <> "" Then
+            Debug.Print "行" & i & " - 危害: [" & harmDataSample & "] 重大さ: [" & severityDataSample & "]"
+            
+            ' 重大さレベルが数値かチェック
+            If severityDataSample <> "" Then
+                If IsNumeric(severityDataSample) Then
+                    Dim numVal As Double
+                    numVal = CDbl(severityDataSample)
+                    If numVal >= 1 And numVal <= 5 Then
+                        Debug.Print "  → 重大さレベル正常: " & numVal
+                    Else
+                        Debug.Print "  → 重大さレベル範囲外: " & numVal
+                    End If
+                Else
+                    Debug.Print "  → 重大さレベル非数値: [" & severityDataSample & "]"
+                End If
+            End If
+        End If
+    Next i
+    
+    ' ヘッダーが正しくない場合の警告
+    If InStr(harmHeaderValue, "危害") = 0 Then
+        Debug.Print "★警告：危害列のヘッダーが期待値と異なります: [" & harmHeaderValue & "]"
+        Call SearchCorrectHarmColumn(ws, keywordRow)
+    End If
+    
+    If InStr(severityHeaderValue, "重大さ") = 0 And InStr(severityHeaderValue, "レベル") = 0 Then
+        Debug.Print "★警告：重大さレベル列のヘッダーが期待値と異なります: [" & severityHeaderValue & "]"
+        Call SearchCorrectSeverityColumn(ws, keywordRow)
+    End If
+    
+    Exit Sub
+    
+ErrorHandler:
+    Debug.Print "ValidateExtractedColumns エラー: " & Err.Description
+End Sub
+
+' 正しい危害列を検索する関数
+Private Sub SearchCorrectHarmColumn(ws As Worksheet, keywordRow As Long)
+    Dim col As Long
+    Dim testValue As String
+    
+    Debug.Print "=== 正しい危害列を再検索 ==="
+    
+    For col = 1 To 100
+        testValue = SafeStringConvert(ws.Cells(keywordRow, col).value)
+        If InStr(testValue, "危害") > 0 And InStr(testValue, "重大") = 0 Then
+            Debug.Print "★正しい危害列候補: " & ConvertColumnNumberToLetter(col) & "列 値=[" & testValue & "]"
+            Call ShowColumnSample(ws, col, keywordRow, "危害（再検索）")
+        End If
+    Next col
+End Sub
+
+' 正しい重大さレベル列を検索する関数
+Private Sub SearchCorrectSeverityColumn(ws As Worksheet, keywordRow As Long)
+    Dim col As Long
+    Dim testValue As String
+    
+    Debug.Print "=== 正しい重大さレベル列を再検索 ==="
+    
+    For col = 1 To 100
+        testValue = SafeStringConvert(ws.Cells(keywordRow, col).value)
+        If InStr(testValue, "重大さ") > 0 Or InStr(testValue, "レベル") > 0 Then
+            Debug.Print "★正しい重大さレベル列候補: " & ConvertColumnNumberToLetter(col) & "列 値=[" & testValue & "]"
+            Call ShowColumnSample(ws, col, keywordRow, "重大さレベル（再検索）")
+        End If
+    Next col
+End Sub
+
+' Function to check if data row is valid
+Private Function IsValidDataRow(rowDataInput As Variant) As Boolean
+    Dim riskItemValue As String, dangerStateValue As String, harmValue As String, severityLevelValue As String
+    
+    riskItemValue = Trim(CStr(rowDataInput(1)))
+    dangerStateValue = Trim(CStr(rowDataInput(2)))
+    harmValue = Trim(CStr(rowDataInput(3)))
+    severityLevelValue = Trim(CStr(rowDataInput(4)))
+    
+    ' Basic empty check
+    If IsAllDataEmpty(riskItemValue, dangerStateValue, harmValue, severityLevelValue) Then
+        IsValidDataRow = False
+        Exit Function
+    End If
+    
+    ' Exclude header rows (more strict check)
+    If IsHeaderRowByContent(riskItemValue, dangerStateValue, harmValue, severityLevelValue) Then
+        Debug.Print "Header row excluded: [" & riskItemValue & "][" & dangerStateValue & "][" & harmValue & "][" & severityLevelValue & "]"
+        IsValidDataRow = False
+        Exit Function
+    End If
+    
+    ' Severity level validity check (only when value exists)
+    If severityLevelValue <> "" Then
+        If IsValidSeverityLevel(severityLevelValue) Then
+            IsValidDataRow = HasValidDataContent(riskItemValue, dangerStateValue, harmValue)
+        Else
+            IsValidDataRow = False
+        End If
+    Else
+        ' Valid even if severity level is empty, as long as other data exists
+        IsValidDataRow = HasValidDataContent(riskItemValue, dangerStateValue, harmValue)
+    End If
+End Function
+
+' Function to check if all data is empty
+Private Function IsAllDataEmpty(riskItemValue As String, dangerStateValue As String, harmValue As String, severityLevelValue As String) As Boolean
+    IsAllDataEmpty = (riskItemValue = "" And dangerStateValue = "" And harmValue = "" And severityLevelValue = "")
+End Function
+
+' Function to check if row is header by content
+Private Function IsHeaderRowByContent(riskItemValue As String, dangerStateValue As String, harmValue As String, severityLevelValue As String) As Boolean
+    Select Case True
+        Case InStr(riskItemValue, "リスク項目") > 0 And InStr(riskItemValue, "No") > 0
+            IsHeaderRowByContent = True
+        Case InStr(dangerStateValue, "危険状態") > 0 And Len(dangerStateValue) < 10
+            IsHeaderRowByContent = True
+        Case InStr(harmValue, "危害") > 0 And InStr(harmValue, "発生頻度") > 0
+            IsHeaderRowByContent = True
+        Case InStr(severityLevelValue, "重大さレベル") > 0
+            IsHeaderRowByContent = True
+        Case InStr(severityLevelValue, "重大さ") > 0 And InStr(severityLevelValue, "レベル") > 0
+            IsHeaderRowByContent = True
+        Case Else
+            IsHeaderRowByContent = False
+    End Select
+End Function
+
+' Function to check if severity level is valid
+Private Function IsValidSeverityLevel(severityLevelValue As String) As Boolean
+    If IsNumeric(severityLevelValue) Then
+        Dim severityNumber As Double
+        severityNumber = CDbl(severityLevelValue)
+        If severityNumber >= 1 And severityNumber <= 5 Then
+            IsValidSeverityLevel = True
+        Else
+            Debug.Print "Severity level out of range: " & severityNumber & " (Invalid row data)"
+            IsValidSeverityLevel = False
+        End If
+    Else
+        Debug.Print "Severity level non-numeric: [" & severityLevelValue & "] (Invalid row data)"
+        IsValidSeverityLevel = False
+    End If
+End Function
+
+' Function to check if valid data content exists
+Private Function HasValidDataContent(riskItemValue As String, dangerStateValue As String, harmValue As String) As Boolean
+    Select Case True
+        Case Len(riskItemValue) > 0
+            HasValidDataContent = True
+        Case Len(dangerStateValue) > 3
+            HasValidDataContent = True
+        Case Len(harmValue) > 2
+            HasValidDataContent = True
+        Case Else
+            HasValidDataContent = False
+    End Select
+End Function
+
+' Function to check if cell has actual data (other than keywords)
+Private Function HasActualData(worksheetTarget As Worksheet, cellAddress As String) As Boolean
+    Dim cellValue As String
+    cellValue = GetMergedCellValue(worksheetTarget, cellAddress)
+    
+    ' Detailed debug for AS and AZ columns
+    If InStr(cellAddress, "AS") > 0 Or InStr(cellAddress, "AZ") > 0 Then
+        Debug.Print "HasActualData(" & cellAddress & "): Value=[" & cellValue & "] Length=" & Len(cellValue)
+    End If
+    
+    ' Judge as actual data if not empty and not a keyword
+    If cellValue <> "" Then
+        ' Check if it's a keyword
+        If IsKeywordValue(cellValue) = False Then
+            ' Further check if it looks like data
+            If IsDataLikeValue(cellValue) Then
+                If InStr(cellAddress, "AS") > 0 Or InStr(cellAddress, "AZ") > 0 Then
+                    Debug.Print "★HasActualData TRUE: " & cellAddress & " = [" & cellValue & "]"
+                End If
+                HasActualData = True
+                Exit Function
+            End If
+        End If
+    End If
+    
+    HasActualData = False
+End Function
+
+' Function to check if value looks like data
+Private Function IsDataLikeValue(valueInput As String) As Boolean
+    Dim cleanValue As String
+    cleanValue = Trim(valueInput)
+    
+    Select Case True
+        Case cleanValue = ""
+            IsDataLikeValue = False
+        Case Len(cleanValue) < 1
+            IsDataLikeValue = False
+        Case Else
+            IsDataLikeValue = True
+    End Select
+End Function
+
+' Function to check if value is a keyword
+Private Function IsKeywordValue(valueInput As String) As Boolean
+    Dim cleanValue As String
+    cleanValue = Trim(valueInput)
+    
+    Select Case True
+        Case InStr(cleanValue, "リスク項目") > 0 And InStr(cleanValue, "No") > 0
+            IsKeywordValue = True
+        Case InStr(cleanValue, "危険状態") > 0 And Len(cleanValue) < 10
+            IsKeywordValue = True
+        Case cleanValue = "危害" And Len(cleanValue) = 2
+            IsKeywordValue = True
+        Case InStr(cleanValue, "重大さレベル") > 0
+            IsKeywordValue = True
+        Case InStr(cleanValue, "項目No") > 0
+            IsKeywordValue = True
+        Case Else
+            IsKeywordValue = False
+    End Select
+End Function
+
+' 固定列でのデータ開始行を探す関数
+Private Function FindDataStartRowInFixedColumns(ws As Worksheet, riskCol As String, dangerCol As String, harmCol As String, severityCol As String) As Long
+    Dim checkRow As Long
+    Dim maxCheckRows As Long
+    Dim hasData As Boolean
+    
+    ' 1行目から最大50行まで検索してデータの開始を探す
+    maxCheckRows = 50
+    
+    For checkRow = 1 To maxCheckRows
+        hasData = False
+        
+        ' いずれかの列に実際のデータがあるかチェック
+        If hasActualData(ws, riskCol & checkRow) Then hasData = True
+        If hasActualData(ws, dangerCol & checkRow) Then hasData = True
+        If hasActualData(ws, harmCol & checkRow) Then hasData = True
+        If hasActualData(ws, severityCol & checkRow) Then hasData = True
+        
+        If hasData Then
+            Debug.Print "固定列でのデータ開始行を発見: " & checkRow
+            FindDataStartRowInFixedColumns = checkRow
+            Exit Function
+        End If
+    Next checkRow
+    
+    ' データが見つからない場合はデフォルト値
+    FindDataStartRowInFixedColumns = 1
+    Debug.Print "固定列でのデータ開始行が見つからないため、デフォルト行を使用: 1"
+End Function
+
+' 行データが全て空かチェックする関数
+Private Function IsAllRowDataEmpty(rowData As Variant) As Boolean
+    Dim i As Long
+    
+    For i = 1 To UBound(rowData)
+        If rowData(i) <> "" Then
+            IsAllRowDataEmpty = False
+            Exit Function
+        End If
+    Next i
+    
+    IsAllRowDataEmpty = True
+End Function
+
+' ヘッダー行かどうかをチェックする関数
+Private Function IsHeaderRow(rowData As Variant) As Boolean
+    Dim i As Long
+    Dim cellValue As String
+    
+    ' 各セルの値をチェック
+    For i = 1 To UBound(rowData)
+        cellValue = Trim(CStr(rowData(i)))
+        
+        ' キーワードが含まれているかチェック
+        If InStr(cellValue, "リスク項目") > 0 Then IsHeaderRow = True: Exit Function
+        If InStr(cellValue, "危険状態") > 0 Then IsHeaderRow = True: Exit Function
+        If InStr(cellValue, "危害") > 0 And InStr(cellValue, "発生頻度") > 0 Then IsHeaderRow = True: Exit Function
+        If InStr(cellValue, "重大さレベル") > 0 Then IsHeaderRow = True: Exit Function
+        If InStr(cellValue, "UFC") > 0 And InStr(cellValue, "危害") > 0 Then IsHeaderRow = True: Exit Function
+    Next i
+    
+    IsHeaderRow = False
+End Function
+
+' アドレスから行番号を取得する関数
+Private Function GetRowFromAddress(cellAddress As String) As Long
+    Dim i As Long
+    Dim char As String
+    Dim rowPart As String
+    
+    ' $記号を除去
+    cellAddress = Replace(cellAddress, "$", "")
+    
+    ' 数字部分を取得（行番号部分）
+    For i = 1 To Len(cellAddress)
+        char = Mid(cellAddress, i, 1)
+        If IsNumeric(char) Then
+            rowPart = rowPart & char
+        End If
+    Next i
+    
+    If rowPart <> "" Then
+        GetRowFromAddress = CLng(rowPart)
+    Else
+        GetRowFromAddress = 1
+    End If
+End Function
+
+' 動的列から最大行数を取得する関数（結合セル対応）
+Private Function GetMaxRowFromDynamicColumns(ws As Worksheet, searchResult As Object) As Long
+    Dim riskColumn As String, dangerColumn As String, harmColumn As String, severityColumn As String
+    Dim lastRowRisk As Long, lastRowDanger As Long, lastRowHarm As Long, lastRowSeverity As Long
+    Dim maxRow As Long, usedRangeRow As Long
+    
+    On Error GoTo ErrorHandler
+    
+    ' 各キーワードが見つかった列を特定
+    riskColumn = GetColumnFromAddress(searchResult("riskItemNoAddress"))
+    dangerColumn = GetColumnFromAddress(searchResult("dangerStateAddress"))
+    harmColumn = GetColumnFromAddress(searchResult("harmAddress"))
+    severityColumn = GetColumnFromAddress(searchResult("severityLevelAddress"))
+    
+    Debug.Print "最終行計算用の列: " & riskColumn & ", " & dangerColumn & ", " & harmColumn & ", " & severityColumn
+    
+    ' UsedRangeからの推定値も取得
+    usedRangeRow = GetLastRowFromUsedRange(ws)
+    
+    ' 各列の最終行を安全に取得
+    lastRowRisk = GetLastRowInColumn(ws, riskColumn)
+    lastRowDanger = GetLastRowInColumn(ws, dangerColumn)
+    lastRowHarm = GetLastRowInColumn(ws, harmColumn)
+    lastRowSeverity = GetLastRowInColumn(ws, severityColumn)
+    
+    Debug.Print "各列の最終行 - リスク:" & lastRowRisk & ", 危険:" & lastRowDanger & ", 危害:" & lastRowHarm & ", 重大さ:" & lastRowSeverity & ", UsedRange:" & usedRangeRow
+    
+    ' 結合セル環境では、特定の列で検出できない場合があるため、UsedRangeも考慮
+    maxRow = Application.WorksheetFunction.Max(lastRowRisk, lastRowDanger, lastRowHarm, lastRowSeverity, usedRangeRow)
+    
+    ' データが検出されない場合は、より広範囲で検索
+    If maxRow <= 5 Then
+        maxRow = FindDataRangeInMergedCellSheet(ws, riskColumn, dangerColumn, harmColumn, severityColumn)
+        Debug.Print "結合セル対応の広範囲検索結果: " & maxRow
+    End If
+    
+    Debug.Print "最終的に採用された最大行: " & maxRow
+    
+    GetMaxRowFromDynamicColumns = maxRow
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "GetMaxRowFromDynamicColumns でエラー: " & Err.Description
+    GetMaxRowFromDynamicColumns = GetLastRowFromUsedRange(ws)
+End Function
+
+' 結合セルシートでのデータ範囲を広範囲検索する関数
+Private Function FindDataRangeInMergedCellSheet(ws As Worksheet, riskCol As String, dangerCol As String, harmCol As String, severityCol As String) As Long
+    Dim i As Long
+    Dim hasActualData As Boolean
+    Dim maxCheckRow As Long
+    
+    On Error GoTo ErrorHandler
+    
+    ' 最大500行まで順次チェック
+    maxCheckRow = 500
+    
+    For i = maxCheckRow To 1 Step -1
+        hasActualData = False
+        
+        ' いずれかの列に実際のデータ（キーワード以外）があるかチェック
+        If hasActualData(ws, riskCol & i) Then hasActualData = True
+        If hasActualData(ws, dangerCol & i) Then hasActualData = True
+        If hasActualData(ws, harmCol & i) Then hasActualData = True
+        If hasActualData(ws, severityCol & i) Then hasActualData = True
+        
+        If hasActualData Then
+            Debug.Print "広範囲検索で実際のデータ発見: 行" & i
+            FindDataRangeInMergedCellSheet = i
+            Exit Function
+        End If
+    Next i
+    
+    ' データが見つからない場合はデフォルト値
+    FindDataRangeInMergedCellSheet = 10
+    Exit Function
+    
+ErrorHandler:
+    FindDataRangeInMergedCellSheet = 10
+End Function
+
+' ワークブックを安全に閉じる関数
+Private Sub SafeCloseWorkbook(wb As Workbook)
+    On Error GoTo ErrorHandler
+    
+    ' ワークブックが有効かチェック
+    If wb Is Nothing Then
+        Exit Sub
+    End If
+    
+    ' ワークブックが既に閉じられているかチェック
+    Dim testName As String
+    testName = wb.Name  ' これがエラーになる場合、既に閉じられている
+    
+    ' 正常にクローズ
+    wb.Close SaveChanges:=False
+    Debug.Print "ワークブックを正常に閉じました: " & testName
+    Exit Sub
+    
+ErrorHandler:
+    ' エラーが発生した場合（既に閉じられている等）
+    Debug.Print "ワークブッククローズでエラー（既に閉じられている可能性）: " & Err.Description
+    ' エラーは無視して続行
+End Sub
+
+' ファイルからデータを取得する関数
+Public Function GetFileData(fileObj As Object, startRowInArray As Long, sheetDataArray As Variant) As Long
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim lastRowB As Long, lastRowF As Long, lastRowG As Long, lastRowH As Long
+    Dim lastRow As Long
+    Dim dataRow As Long
+    Dim currentRow As Long
+    
+    GetFileData = startRowInArray
+    currentRow = startRowInArray
+    
+    ' ファイルオブジェクトを使った処理
+    Debug.Print "処理中: " & fileObj.Name
+    
+    ' 例：Excelファイルの場合
+    If Right(fileObj.Name, 4) = ".xls" Or Right(fileObj.Name, 5) = ".xlsx" Then
+        ' 画面更新を停止
+        Application.ScreenUpdating = False
+        Application.DisplayAlerts = False
+        
+        ' Excelファイルを非表示で開く
+        Set wb = Workbooks.Open(fileObj.Path, UpdateLinks:=0, ReadOnly:=True)
+        wb.Windows(1).Visible = False  ' ウィンドウを非表示
+        
+        Debug.Print "Excelファイルとして処理: " & fileObj.Path
+        
+        ' 最初のシートを対象とする（必要に応じて変更）
+        Set ws = wb.Worksheets(1)
+        
+        ' Get last row of each column (A, B, C, D)
+        Dim lastRowA As Long, lastRowC As Long, lastRowD As Long
+        lastRowA = ws.Cells(ws.Rows.Count, riskItemColumnAddress).End(xlUp).Row
+        lastRowB = ws.Cells(ws.Rows.Count, dangerStateColumnAddress).End(xlUp).Row
+        lastRowC = ws.Cells(ws.Rows.Count, harmColumnAddress).End(xlUp).Row
+        lastRowD = ws.Cells(ws.Rows.Count, severityLevelColumnAddress).End(xlUp).Row
+        
+        ' Get maximum row count
+        lastRow = Application.WorksheetFunction.Max(lastRowA, lastRowB, lastRowC, lastRowD)
+        
+        ' Get data from data start row onwards
+        Dim dataStartRow As Long
+        dataStartRow = FindDataStartRowInFixedColumns(ws, riskItemColumnAddress, dangerStateColumnAddress, harmColumnAddress, severityLevelColumnAddress)
+        
+        If lastRow >= dataStartRow Then
+            For dataRow = dataStartRow To lastRow
+                currentRow = currentRow + 1
+                
+                ' Store values in array (A,B,C,D columns only) - merged cell compatible
+                sheetDataArray(currentRow, 1) = GetMergedCellValue(ws, riskItemColumnAddress & dataRow)     ' A column value
+                sheetDataArray(currentRow, 2) = GetMergedCellValue(ws, dangerStateColumnAddress & dataRow)  ' B column value
+                sheetDataArray(currentRow, 3) = GetMergedCellValue(ws, harmColumnAddress & dataRow)         ' C column value
+                sheetDataArray(currentRow, 4) = GetMergedCellValue(ws, severityLevelColumnAddress & dataRow) ' D column value
+                
+                Debug.Print "Row " & dataRow & ": A=" & sheetDataArray(currentRow, 1) & _
+                            " B=" & sheetDataArray(currentRow, 2) & _
+                            " C=" & sheetDataArray(currentRow, 3) & _
+                            " D=" & sheetDataArray(currentRow, 4)
+            Next dataRow
+        End If
+        
+        ' ワークブックを安全に閉じる
+        Call SafeCloseWorkbook(wb)
+        
+        ' 画面更新を再開
+        Application.DisplayAlerts = True
+        Application.ScreenUpdating = True
+    End If
+    
+    GetFileData = currentRow
+End Function
+
+' ファイル内のキーワードを検索してそのアドレスを返す関数
+Private Function FindKeywordsInFile(fileObj As Object) As Collection
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim searchResults As Collection
+    Dim resultDict As Object
+    Dim foundAddresses As Object
+    
+    On Error GoTo ErrorHandler
+    
+    Set searchResults = New Collection
+    Set foundAddresses = CreateObject("Scripting.Dictionary")
+    
+    ' Open workbook for keyword search
+    Set wb = OpenWorkbookInBackground(fileObj.Path)
+    If wb Is Nothing Then
+        Set FindKeywordsInFile = searchResults
+        GoTo CleanUp
+    End If
+    
+    ' Search in all worksheets
+    Debug.Print "=== 全シート検索開始 ==="
+    Debug.Print "  ワークブック内のシート数: " & wb.Worksheets.Count
+    
+    Dim sheetIndex As Long
+    For sheetIndex = 1 To wb.Worksheets.Count
+        Set ws = wb.Worksheets(sheetIndex)
+        Debug.Print "  シート " & sheetIndex & " 検索開始: " & ws.Name
+        
+        ' Search for each keyword with flexible patterns
+        Dim riskAddress As String, dangerAddress As String, harmAddress As String, severityAddress As String
+        
+        riskAddress = FindStrictKeyword(ws, Array("リスク項目", "リスク", "項目", "No.", "No", "Risk Item"))
+        dangerAddress = FindStrictKeyword(ws, Array("危険状態", "危険", "Hazardous Situation", "Hazard"))
+        harmAddress = FindHarmColumn(ws)
+        severityAddress = FindSeverityLevelColumn(ws)
+        
+        Debug.Print "    検索結果 - Risk:" & IIf(riskAddress <> "", riskAddress, "未発見") & _
+                   ", Danger:" & IIf(dangerAddress <> "", dangerAddress, "未発見") & _
+                   ", Harm:" & IIf(harmAddress <> "", harmAddress, "未発見") & _
+                   ", Severity:" & IIf(severityAddress <> "", severityAddress, "未発見")
+        
+        ' Create result dictionary if all 4 required items found
+        If riskAddress <> "" And dangerAddress <> "" And harmAddress <> "" And severityAddress <> "" Then
+            Set resultDict = CreateObject("Scripting.Dictionary")
+            resultDict.Add "sheetName", ws.Name
+            resultDict.Add "riskItemNoAddress", riskAddress
+            resultDict.Add "dangerStateAddress", dangerAddress
+            resultDict.Add "harmAddress", harmAddress
+            resultDict.Add "severityLevelAddress", severityAddress
+            
+            searchResults.Add resultDict
+            
+            Debug.Print "    ✓ シート " & ws.Name & " が4項目要件を満たしています"
+            Debug.Print "      Risk Item: " & riskAddress & " → " & GetColumnFromAddress(riskAddress)
+            Debug.Print "      Danger State: " & dangerAddress & " → " & GetColumnFromAddress(dangerAddress)
+            Debug.Print "      Harm: " & harmAddress & " → " & GetColumnFromAddress(harmAddress)
+            Debug.Print "      Severity Level: " & severityAddress & " → " & GetColumnFromAddress(severityAddress)
+            
+            ' Show actual header content for verification
+            Debug.Print "      実際のヘッダー内容確認:"
+            Debug.Print "        Risk: [" & GetMergedCellValue(ws, riskAddress) & "]"
+            Debug.Print "        Danger: [" & GetMergedCellValue(ws, dangerAddress) & "]"
+            Debug.Print "        Harm: [" & GetMergedCellValue(ws, harmAddress) & "]"
+            Debug.Print "        Severity: [" & GetMergedCellValue(ws, severityAddress) & "]"
+        Else
+            Debug.Print "=== Minimum keywords not found in " & fileObj.Name & " ==="
+            Debug.Print "    シート " & ws.Name & " は4項目要件を満たしていません"
+            Debug.Print "      Risk Item: " & IIf(riskAddress <> "", riskAddress & " → " & GetColumnFromAddress(riskAddress), "NOT FOUND")
+            Debug.Print "      Danger State: " & IIf(dangerAddress <> "", dangerAddress & " → " & GetColumnFromAddress(dangerAddress), "NOT FOUND")
+            Debug.Print "      Harm: " & IIf(harmAddress <> "", harmAddress & " → " & GetColumnFromAddress(harmAddress), "NOT FOUND")
+            Debug.Print "      Severity Level: " & IIf(severityAddress <> "", severityAddress & " → " & GetColumnFromAddress(severityAddress), "NOT FOUND")
+        End If
+    Next sheetIndex
+    
+    Debug.Print "=== 全シート検索完了 ==="
+    Debug.Print "  有効なシート数: " & searchResults.Count & " / " & wb.Worksheets.Count
+    
+CleanUp:
+    If Not wb Is Nothing Then
+        Call SafeCloseWorkbook(wb)
+    End If
+    Call RestoreExcelVisibility
+    
+    Set FindKeywordsInFile = searchResults
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindKeywordsInFile Error: " & Err.Description
+    GoTo CleanUp
+End Function
+
+' Function to find a keyword in worksheet and return its address
+Private Function FindKeywordInWorksheet(worksheetTarget As Worksheet, keyword As String) As String
+    Dim searchRange As Range
+    Dim foundCell As Range
+    Dim maxSearchRows As Long
+    Dim maxSearchColumns As Long
+    Dim i As Long, j As Long
+    Dim cellValue As String
+    Dim mergedCellValue As String
+    
+    On Error GoTo ErrorHandler
+    
+    ' Search within reasonable range (first 20 rows, 100 columns for merged cells)
+    maxSearchRows = 20
+    maxSearchColumns = 100
+    
+    ' First try standard Find method
+    Set searchRange = worksheetTarget.Range(worksheetTarget.Cells(1, 1), worksheetTarget.Cells(maxSearchRows, maxSearchColumns))
+    Set foundCell = searchRange.Find(What:=keyword, LookIn:=xlValues, LookAt:=xlPart)
+    
+    If Not foundCell Is Nothing Then
+        FindKeywordInWorksheet = foundCell.Address
+        Debug.Print "Found '" & keyword & "' at " & foundCell.Address & " (standard search)"
+        Exit Function
+    End If
+    
+    ' If not found with standard search, try merged cell aware search
+    Debug.Print "Standard search failed for '" & keyword & "', trying merged cell search..."
+    
+    For i = 1 To maxSearchRows
+        For j = 1 To maxSearchColumns
+            ' Get merged cell value safely
+            mergedCellValue = GetMergedCellValue(worksheetTarget, worksheetTarget.Cells(i, j).Address)
+            
+            ' Check if keyword is contained in the merged cell value
+            If InStr(1, mergedCellValue, keyword, vbTextCompare) > 0 Then
+                FindKeywordInWorksheet = worksheetTarget.Cells(i, j).Address
+                Debug.Print "Found '" & keyword & "' at " & worksheetTarget.Cells(i, j).Address & " (merged cell search)"
+                Debug.Print "  Merged cell content: [" & mergedCellValue & "]"
+                Exit Function
+            End If
+        Next j
+    Next i
+    
+    ' If still not found
+    FindKeywordInWorksheet = ""
+    Debug.Print "Keyword '" & keyword & "' not found (including merged cell search)"
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindKeywordInWorksheet Error for '" & keyword & "': " & Err.Description
+    FindKeywordInWorksheet = ""
+End Function
+
+' Function to find keywords with flexible patterns
+Private Function FindFlexibleKeyword(worksheetTarget As Worksheet, keywordArray As Variant) As String
+    Dim i As Long
+    Dim foundAddress As String
+    Dim searchKeyword As String
+    
+    On Error GoTo ErrorHandler
+    
+    Debug.Print "=== Flexible keyword search started ==="
+    
+    ' Create keyword string for debug output
+    Dim keywordListForDebug As String
+    For i = 0 To UBound(keywordArray)
+        If i > 0 Then keywordListForDebug = keywordListForDebug & ", "
+        keywordListForDebug = keywordListForDebug & CStr(keywordArray(i))
+    Next i
+    Debug.Print "Keywords to search: " & keywordListForDebug
+    
+    ' Try each keyword pattern with standard search first
+    For i = 0 To UBound(keywordArray)
+        searchKeyword = CStr(keywordArray(i))
+        foundAddress = FindKeywordInWorksheet(worksheetTarget, searchKeyword)
+        If foundAddress <> "" Then
+            FindFlexibleKeyword = foundAddress
+            Debug.Print "Flexible search success (standard): '" & searchKeyword & "' found at " & foundAddress
+            Exit Function
+        End If
+    Next i
+    
+    ' If standard search failed, try merged cell specific search
+    Debug.Print "Standard search failed, trying merged cell search..."
+    For i = 0 To UBound(keywordArray)
+        searchKeyword = CStr(keywordArray(i))
+        foundAddress = FindMergedCellRangeWithKeyword(worksheetTarget, searchKeyword)
+        If foundAddress <> "" Then
+            FindFlexibleKeyword = foundAddress
+            Debug.Print "Flexible search success (merged): '" & searchKeyword & "' found at " & foundAddress
+            Exit Function
+        End If
+    Next i
+    
+    ' If no keyword found, return empty
+    FindFlexibleKeyword = ""
+    
+    ' Create keyword string for debug output
+    Dim keywordList As String
+    For i = 0 To UBound(keywordArray)
+        If i > 0 Then keywordList = keywordList & ", "
+        keywordList = keywordList & CStr(keywordArray(i))
+    Next i
+    
+    Debug.Print "Flexible search failed for all keywords: " & keywordList
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindFlexibleKeyword Error: " & Err.Description
+    FindFlexibleKeyword = ""
+End Function
+
+' 厳密一致でキーワードを検索する関数（完全ヘッダー一致）
+Private Function FindStrictKeyword(worksheetTarget As Worksheet, keywordArray As Variant) As String
+    Dim i As Long
+    Dim foundAddress As String
+    Dim searchKeyword As String
+    
+    On Error GoTo ErrorHandler
+    
+    Debug.Print "=== Strict keyword search started ==="
+    
+    ' Create keyword string for debug output
+    Dim keywordListForDebug As String
+    For i = 0 To UBound(keywordArray)
+        If i > 0 Then keywordListForDebug = keywordListForDebug & ", "
+        keywordListForDebug = keywordListForDebug & CStr(keywordArray(i))
+    Next i
+    Debug.Print "Strict keywords to search: " & keywordListForDebug
+    
+    ' Try each keyword pattern with strict matching
+    For i = 0 To UBound(keywordArray)
+        searchKeyword = CStr(keywordArray(i))
+        foundAddress = FindStrictKeywordInWorksheet(worksheetTarget, searchKeyword)
+        If foundAddress <> "" Then
+            FindStrictKeyword = foundAddress
+            Debug.Print "Strict search success: '" & searchKeyword & "' found at " & foundAddress
+            Exit Function
+        End If
+    Next i
+    
+    ' If no keyword found, return empty
+    FindStrictKeyword = ""
+    
+    ' Create keyword string for debug output
+    Dim keywordList As String
+    For i = 0 To UBound(keywordArray)
+        If i > 0 Then keywordList = keywordList & ", "
+        keywordList = keywordList & CStr(keywordArray(i))
+    Next i
+    
+    Debug.Print "Strict search failed for all keywords: " & keywordList
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindStrictKeyword Error: " & Err.Description
+    FindStrictKeyword = ""
+End Function
+
+' Function to find keyword with strict header matching (avoids partial matches in long text)
+Private Function FindStrictKeywordInWorksheet(worksheetTarget As Worksheet, keyword As String) As String
+    Dim i As Long, j As Long
+    Dim currentCell As Range
+    Dim cellContent As String
+    Dim cleanContent As String
+    Dim maxSearchRows As Long, maxSearchColumns As Long
+    
+    On Error GoTo ErrorHandler
+    
+    maxSearchRows = 20
+    maxSearchColumns = 100
+    
+    Debug.Print "Strict search for '" & keyword & "' in range A1 to " & _
+               ColumnNumberToLetter(maxSearchColumns) & maxSearchRows
+    
+    For i = 1 To maxSearchRows
+        For j = 1 To maxSearchColumns
+            Set currentCell = worksheetTarget.Cells(i, j)
+            
+            ' Get cell content (including merged cells)
+            cellContent = GetMergedCellValue(worksheetTarget, currentCell.Address)
+            
+            ' Clean and normalize content for comparison
+            cleanContent = Trim(cellContent)
+            cleanContent = Replace(cleanContent, vbLf, "")
+            cleanContent = Replace(cleanContent, vbCr, "")
+            cleanContent = Replace(cleanContent, Chr(160), " ")  ' Replace non-breaking space
+            
+            ' Check for strict header match
+            If IsStrictHeaderMatch(cleanContent, keyword) Then
+                FindStrictKeywordInWorksheet = currentCell.Address
+                Debug.Print "Strict match found for '" & keyword & "' at " & currentCell.Address
+                Debug.Print "  Cell content: [" & cleanContent & "]"
+                Exit Function
+            End If
+        Next j
+    Next i
+    
+    FindStrictKeywordInWorksheet = ""
+    Debug.Print "Strict keyword '" & keyword & "' not found"
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindStrictKeywordInWorksheet Error for '" & keyword & "': " & Err.Description
+    FindStrictKeywordInWorksheet = ""
+End Function
+
+' Function to determine if cell content is a strict header match
+Private Function IsStrictHeaderMatch(cellContent As String, keyword As String) As Boolean
+    Dim normalizedContent As String
+    Dim normalizedKeyword As String
+    
+    On Error GoTo ErrorHandler
+    
+    ' Normalize both strings for comparison
+    normalizedContent = Trim(UCase(cellContent))
+    normalizedKeyword = Trim(UCase(keyword))
+    
+    ' Rule 1: Exact match
+    If normalizedContent = normalizedKeyword Then
+        IsStrictHeaderMatch = True
+        Debug.Print "  → Exact match: [" & cellContent & "] = [" & keyword & "]"
+        Exit Function
+    End If
+    
+    ' Rule 2: Content is exactly the keyword (no extra text)
+    If normalizedContent = normalizedKeyword Then
+        IsStrictHeaderMatch = True
+        Debug.Print "  → Strict match: [" & cellContent & "] matches [" & keyword & "]"
+        Exit Function
+    End If
+    
+    ' Rule 3: For specific dangerous patterns, reject if found
+    If keyword = "危害" Or keyword = "組織損傷" Or keyword = "損傷" Then
+        ' Reject if it contains calculation-related terms
+        If InStr(normalizedContent, "判定") > 0 Or _
+           InStr(normalizedContent, "P3") > 0 Or _
+           InStr(normalizedContent, "UFC") > 0 Or _
+           InStr(normalizedContent, "発生頻度") > 0 Or _
+           InStr(normalizedContent, "確率") > 0 Then
+            IsStrictHeaderMatch = False
+            Debug.Print "  → Rejected pattern for " & keyword & ": [" & cellContent & "] contains exclusion terms"
+            Exit Function
+        End If
+        
+        ' Accept if it contains the keyword and is reasonably short
+        If InStr(normalizedContent, normalizedKeyword) > 0 And Len(normalizedContent) <= 15 Then
+            IsStrictHeaderMatch = True
+            Debug.Print "  → Short harm-related match: [" & cellContent & "]"
+            Exit Function
+        End If
+    End If
+    
+    ' Rule 4: For other keywords, accept if they are prominent in short text
+    If InStr(normalizedContent, normalizedKeyword) > 0 And Len(normalizedContent) <= 15 Then
+        IsStrictHeaderMatch = True
+        Debug.Print "  → Short text match: [" & cellContent & "] contains [" & keyword & "]"
+        Exit Function
+    End If
+    
+    ' Default: not a match
+    IsStrictHeaderMatch = False
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "IsStrictHeaderMatch Error: " & Err.Description
+    IsStrictHeaderMatch = False
+End Function
+
+' Function to find severity level column by analyzing both header and data
+Private Function FindSeverityLevelColumn(worksheetTarget As Worksheet) As String
+    Dim severityByDirectSearch As String
+    Dim severityByHeader As String
+    Dim severityByData As String
+    
+    On Error GoTo ErrorHandler
+    
+    Debug.Print "=== Searching for Severity Level Column ==="
+    
+    ' First try direct search in common columns (G, H, I area)
+    severityByDirectSearch = FindSeverityColumnByDirectSearch(worksheetTarget)
+    Debug.Print "Direct search result: " & IIf(severityByDirectSearch <> "", severityByDirectSearch, "NOT FOUND")
+    
+    ' Then try to find by header keywords
+    severityByHeader = FindStrictKeyword(worksheetTarget, Array("重大さレベル", "重大さ", "レベル", "Severity", "Risk Level", "Severity Level"))
+    Debug.Print "Header search result: " & IIf(severityByHeader <> "", severityByHeader, "NOT FOUND")
+    
+    ' Also try to find by data pattern (columns with numeric values 1-5)
+    severityByData = FindColumnWithSeverityData(worksheetTarget)
+    Debug.Print "Data pattern search result: " & IIf(severityByData <> "", severityByData, "NOT FOUND")
+    
+    ' Priority: Direct search first, header match second, then data pattern
+    If severityByDirectSearch <> "" Then
+        FindSeverityLevelColumn = severityByDirectSearch
+        Debug.Print "Using direct search severity column: " & severityByDirectSearch
+    ElseIf severityByHeader <> "" Then
+        FindSeverityLevelColumn = severityByHeader
+        Debug.Print "Using header-based severity column: " & severityByHeader
+    ElseIf severityByData <> "" Then
+        FindSeverityLevelColumn = severityByData
+        Debug.Print "Using data-pattern-based severity column: " & severityByData
+    Else
+        FindSeverityLevelColumn = ""
+        Debug.Print "Severity level column not found"
+    End If
+    
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindSeverityLevelColumn Error: " & Err.Description
+    FindSeverityLevelColumn = ""
+End Function
+
+' Function to directly search for severity level column in common locations
+Private Function FindSeverityColumnByDirectSearch(worksheetTarget As Worksheet) As String
+    Dim col As Long
+    Dim row As Long
+    Dim cellValue As String
+    Dim cleanValue As String
+    
+    On Error GoTo ErrorHandler
+    
+    Debug.Print "=== Direct Severity Column Search in A-L range ==="
+    
+    ' Search in first 20 rows and A-L columns (where headers are typically located)
+    For row = 1 To 20
+        For col = 1 To 12  ' A to L
+            cellValue = Trim(CStr(worksheetTarget.Cells(row, col).Value))
+            cleanValue = UCase(Replace(Replace(cellValue, vbLf, ""), vbCr, ""))
+            
+            Debug.Print "  " & ColumnNumberToLetter(col) & row & ": [" & cellValue & "]"
+            
+            ' Check for severity-related content with partial matching (Japanese and English)
+            If InStr(cleanValue, "重大さレベル") > 0 Or _
+               InStr(cleanValue, "重大さ") > 0 Or _
+               InStr(cleanValue, "レベル") > 0 Or _
+               InStr(cleanValue, "RISK LEVEL") > 0 Or _
+               InStr(cleanValue, "SEVERITY LEVEL") > 0 Or _
+               (InStr(cleanValue, "SEVERITY") > 0 And InStr(cleanValue, "LEVEL") > 0) Or _
+               (InStr(cleanValue, "RISK") > 0 And InStr(cleanValue, "LEVEL") > 0) Then
+                Debug.Print "    ★ Found potential severity column at " & ColumnNumberToLetter(col) & row
+                
+                ' Verify this column has numeric data (1-5 range)
+                Dim hasValidData As Boolean
+                hasValidData = VerifyColumnHasSeverityData(worksheetTarget, col, row + 1)
+                
+                If hasValidData Then
+                    FindSeverityColumnByDirectSearch = ColumnNumberToLetter(col) & row
+                    Debug.Print "    ✓ Confirmed: " & ColumnNumberToLetter(col) & " column has valid severity data"
+                    Exit Function
+                Else
+                    Debug.Print "    ✗ Column " & ColumnNumberToLetter(col) & " has no valid severity data, continuing search"
+                End If
+            End If
+        Next col
+    Next row
+    
+    FindSeverityColumnByDirectSearch = ""
+    Debug.Print "Direct severity column search failed"
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindSeverityColumnByDirectSearch Error: " & Err.Description
+    FindSeverityColumnByDirectSearch = ""
+End Function
+
+' Function to verify if a column has valid severity data (numeric 1-5)
+Private Function VerifyColumnHasSeverityData(worksheetTarget As Worksheet, colNum As Long, startRow As Long) As Boolean
+    Dim row As Long
+    Dim cellValue As String
+    Dim numValue As Double
+    Dim validCount As Long
+    Dim totalCount As Long
+    
+    On Error GoTo ErrorHandler
+    
+    validCount = 0
+    totalCount = 0
+    
+    ' Check next 10 rows for numeric data in 1-5 range
+    For row = startRow To startRow + 9
+        cellValue = Trim(CStr(worksheetTarget.Cells(row, colNum).Value))
+        If cellValue <> "" Then
+            totalCount = totalCount + 1
+            If IsNumeric(cellValue) Then
+                numValue = CDbl(cellValue)
+                If numValue >= 1 And numValue <= 5 Then
+                    validCount = validCount + 1
+                End If
+            End If
+        End If
+    Next row
+    
+    ' At least 50% should be valid severity values (1-5) and at least 3 entries
+    VerifyColumnHasSeverityData = (validCount >= 3 And totalCount >= 5 And (validCount / totalCount) >= 0.5)
+    Debug.Print "      Column " & ColumnNumberToLetter(colNum) & " has " & validCount & "/" & totalCount & " valid severity entries"
+    
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "VerifyColumnHasSeverityData Error: " & Err.Description
+    VerifyColumnHasSeverityData = False
+End Function
+
+' Function to find column with severity level data pattern (numeric 1-5)
+Private Function FindColumnWithSeverityData(worksheetTarget As Worksheet) As String
+    Dim col As Long
+    Dim row As Long
+    Dim cellValue As String
+    Dim numericValue As Double
+    Dim validSeverityCount As Long
+    Dim totalDataCount As Long
+    Dim severityRatio As Double
+    Dim maxCols As Long, maxRows As Long
+    
+    On Error GoTo ErrorHandler
+    
+    maxCols = 100  ' Search up to column CV
+    maxRows = 50   ' Check first 50 rows for data pattern
+    
+    Debug.Print "Analyzing columns for severity data pattern (numeric 1-5)..."
+    
+    For col = 1 To maxCols
+        validSeverityCount = 0
+        totalDataCount = 0
+        
+        ' Check data in this column
+        For row = 10 To maxRows  ' Start from row 10 to skip headers
+            cellValue = GetMergedCellValue(worksheetTarget, worksheetTarget.Cells(row, col).Address)
+            
+            If Trim(cellValue) <> "" Then
+                totalDataCount = totalDataCount + 1
+                
+                ' Check if it's a valid severity level (1-5)
+                If IsNumeric(cellValue) Then
+                    numericValue = CDbl(cellValue)
+                    If numericValue >= 1 And numericValue <= 5 And numericValue = Int(numericValue) Then
+                        validSeverityCount = validSeverityCount + 1
+                    End If
+                End If
+            End If
+        Next row
+        
+        ' If this column has a high ratio of valid severity values, it's likely the severity column
+        If totalDataCount >= 5 Then  ' At least 5 data points
+            severityRatio = validSeverityCount / totalDataCount
+            If severityRatio >= 0.7 Then  ' 70% or more are valid severity values
+                FindColumnWithSeverityData = ColumnNumberToLetter(col) & "1"
+                Debug.Print "Found severity data column: " & ColumnNumberToLetter(col) & " (ratio: " & Format(severityRatio, "0.0%") & ", valid: " & validSeverityCount & "/" & totalDataCount & ")"
+                Exit Function
+            End If
+        End If
+    Next col
+    
+    FindColumnWithSeverityData = ""
+    Debug.Print "No column found with severity data pattern"
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindColumnWithSeverityData Error: " & Err.Description
+    FindColumnWithSeverityData = ""
+End Function
+
+' Function to find harm column with comprehensive search
+Private Function FindHarmColumn(worksheetTarget As Worksheet) As String
+    Dim harmByKeyword As String
+    Dim harmByDataPattern As String
+    Dim harmByDirectSearch As String
+    
+    On Error GoTo ErrorHandler
+    
+    Debug.Print "=== Searching for Harm Column ==="
+    
+    ' First try direct search in common columns (G, H area where severity was found)
+    harmByDirectSearch = FindHarmColumnByDirectSearch(worksheetTarget)
+    Debug.Print "Harm direct search result: " & IIf(harmByDirectSearch <> "", harmByDirectSearch, "NOT FOUND")
+    
+    ' Then try to find by harm-related keywords
+    harmByKeyword = FindStrictKeyword(worksheetTarget, Array("危害", "組織損傷", "損傷", "傷害", "harm", "injury", "damage", "Harm"))
+    Debug.Print "Harm keyword search result: " & IIf(harmByKeyword <> "", harmByKeyword, "NOT FOUND")
+    
+    ' Also try to find by data pattern (columns with meaningful harm data)
+    harmByDataPattern = FindColumnWithHarmData(worksheetTarget)
+    Debug.Print "Harm data pattern search result: " & IIf(harmByDataPattern <> "", harmByDataPattern, "NOT FOUND")
+    
+    ' Priority: Direct search first, keyword match second, then data pattern
+    If harmByDirectSearch <> "" Then
+        FindHarmColumn = harmByDirectSearch
+        Debug.Print "Using direct search harm column: " & harmByDirectSearch
+    ElseIf harmByKeyword <> "" Then
+        FindHarmColumn = harmByKeyword
+        Debug.Print "Using keyword-based harm column: " & harmByKeyword
+    ElseIf harmByDataPattern <> "" Then
+        FindHarmColumn = harmByDataPattern
+        Debug.Print "Using data-pattern-based harm column: " & harmByDataPattern
+    Else
+        FindHarmColumn = ""
+        Debug.Print "Harm column not found"
+    End If
+    
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindHarmColumn Error: " & Err.Description
+    FindHarmColumn = ""
+End Function
+
+' Function to directly search for harm column in common locations
+Private Function FindHarmColumnByDirectSearch(worksheetTarget As Worksheet) As String
+    Dim col As Long
+    Dim row As Long
+    Dim cellValue As String
+    Dim cleanValue As String
+    
+    On Error GoTo ErrorHandler
+    
+    Debug.Print "=== Direct Harm Column Search in A-L range ==="
+    
+    ' Search in first 20 rows and A-L columns (where headers are typically located)
+    For row = 1 To 20
+        For col = 1 To 12  ' A to L
+            cellValue = Trim(CStr(worksheetTarget.Cells(row, col).Value))
+            cleanValue = UCase(Replace(Replace(cellValue, vbLf, ""), vbCr, ""))
+            
+            Debug.Print "  " & ColumnNumberToLetter(col) & row & ": [" & cellValue & "]"
+            
+            ' Check for harm-related content with partial matching (Japanese and English)
+            If InStr(cleanValue, "組織損傷") > 0 Or _
+               InStr(cleanValue, "組織") > 0 Or _
+               InStr(cleanValue, "損傷") > 0 Or _
+               InStr(cleanValue, "危害") > 0 Or _
+               InStr(cleanValue, "HARM") > 0 Then
+                Debug.Print "    ★ Found potential harm column at " & ColumnNumberToLetter(col) & row
+                
+                ' Verify this column has actual data
+                Dim hasData As Boolean
+                hasData = VerifyColumnHasData(worksheetTarget, col, row + 1)
+                
+                If hasData Then
+                    FindHarmColumnByDirectSearch = ColumnNumberToLetter(col) & row
+                    Debug.Print "    ✓ Confirmed: " & ColumnNumberToLetter(col) & " column has data"
+                    Exit Function
+                Else
+                    Debug.Print "    ✗ Column " & ColumnNumberToLetter(col) & " has no data, continuing search"
+                End If
+            End If
+        Next col
+    Next row
+    
+    FindHarmColumnByDirectSearch = ""
+    Debug.Print "Direct harm column search failed"
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindHarmColumnByDirectSearch Error: " & Err.Description
+    FindHarmColumnByDirectSearch = ""
+End Function
+
+' Function to verify if a column has actual data
+Private Function VerifyColumnHasData(worksheetTarget As Worksheet, colNum As Long, startRow As Long) As Boolean
+    Dim row As Long
+    Dim cellValue As String
+    Dim dataCount As Long
+    
+    On Error GoTo ErrorHandler
+    
+    dataCount = 0
+    
+    ' Check next 10 rows for data
+    For row = startRow To startRow + 9
+        cellValue = Trim(CStr(worksheetTarget.Cells(row, colNum).Value))
+        If cellValue <> "" And Not IsNumeric(cellValue) Then
+            dataCount = dataCount + 1
+        End If
+    Next row
+    
+    VerifyColumnHasData = (dataCount >= 3)  ' At least 3 non-empty, non-numeric values
+    Debug.Print "      Column " & ColumnNumberToLetter(colNum) & " has " & dataCount & " data entries"
+    
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "VerifyColumnHasData Error: " & Err.Description
+    VerifyColumnHasData = False
+End Function
+
+' Function to find column with harm data pattern (meaningful text data)
+Private Function FindColumnWithHarmData(worksheetTarget As Worksheet) As String
+    Dim col As Long
+    Dim row As Long
+    Dim cellValue As String
+    Dim meaningfulDataCount As Long
+    Dim totalDataCount As Long
+    Dim dataRatio As Double
+    Dim maxCols As Long, maxRows As Long
+    
+    On Error GoTo ErrorHandler
+    
+    maxCols = 100  ' Search up to column CV
+    maxRows = 50   ' Check first 50 rows for data pattern
+    
+    Debug.Print "Analyzing columns for harm data pattern (meaningful text)..."
+    
+    For col = 1 To maxCols
+        meaningfulDataCount = 0
+        totalDataCount = 0
+        
+        ' Check data in this column
+        For row = 10 To maxRows  ' Start from row 10 to skip headers
+            cellValue = Trim(GetMergedCellValue(worksheetTarget, worksheetTarget.Cells(row, col).Address))
+            
+            If cellValue <> "" Then
+                totalDataCount = totalDataCount + 1
+                
+                ' Check if it's meaningful harm-related text
+                If IsMeaningfulHarmData(cellValue) Then
+                    meaningfulDataCount = meaningfulDataCount + 1
+                End If
+            End If
+        Next row
+        
+        ' If this column has a high ratio of meaningful harm data, it's likely the harm column
+        If totalDataCount >= 5 Then  ' At least 5 data points
+            dataRatio = meaningfulDataCount / totalDataCount
+            If dataRatio >= 0.6 Then  ' 60% or more are meaningful harm data
+                FindColumnWithHarmData = ColumnNumberToLetter(col) & "1"
+                Debug.Print "Found harm data column: " & ColumnNumberToLetter(col) & " (ratio: " & Format(dataRatio, "0.0%") & ", meaningful: " & meaningfulDataCount & "/" & totalDataCount & ")"
+                Exit Function
+            End If
+        End If
+    Next col
+    
+    FindColumnWithHarmData = ""
+    Debug.Print "No column found with harm data pattern"
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindColumnWithHarmData Error: " & Err.Description
+    FindColumnWithHarmData = ""
+End Function
+
+' テキストが意味のある危害データかどうかを判定する関数
+Private Function IsMeaningfulHarmData(cellValue As String) As Boolean
+    Dim normalizedValue As String
+    
+    On Error GoTo ErrorHandler
+    
+    normalizedValue = UCase(Trim(cellValue))
+    
+    ' 明らかに危害データではないものを除外
+    If IsNumeric(cellValue) Then
+        IsMeaningfulHarmData = False
+        Exit Function
+    End If
+    
+    If Len(normalizedValue) < 2 Then
+        IsMeaningfulHarmData = False
+        Exit Function
+    End If
+    
+    ' 計算関連の用語を除外
+    If InStr(normalizedValue, "P2") > 0 Or _
+       InStr(normalizedValue, "P3") > 0 Or _
+       InStr(normalizedValue, "UFC") > 0 Or _
+       InStr(normalizedValue, "判定") > 0 Or _
+       InStr(normalizedValue, "発生頻度") > 0 Then
+        IsMeaningfulHarmData = False
+        Exit Function
+    End If
+    
+    ' 危害関連の用語を含める
+    If InStr(normalizedValue, "危害") > 0 Or _
+       InStr(normalizedValue, "損傷") > 0 Or _
+       InStr(normalizedValue, "傷害") > 0 Or _
+       InStr(normalizedValue, "組織損傷") > 0 Or _
+       InStr(normalizedValue, "HARM") > 0 Or _
+       InStr(normalizedValue, "INJURY") > 0 Or _
+       InStr(normalizedValue, "DAMAGE") > 0 Then
+        IsMeaningfulHarmData = True
+        Exit Function
+    End If
+    
+    ' Include meaningful descriptive text (likely harm descriptions)
+    If Len(normalizedValue) >= 3 And Len(normalizedValue) <= 50 Then
+        ' If it's not obviously calculation data and has reasonable length, consider it harm data
+        IsMeaningfulHarmData = True
+        Exit Function
+    End If
+    
+    ' Default: not meaningful harm data
+    IsMeaningfulHarmData = False
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "IsMeaningfulHarmData Error: " & Err.Description
+    IsMeaningfulHarmData = False
+End Function
+
+' Function to find keywords specifically in merged cells
+Private Function FindKeywordInMergedCells(worksheetTarget As Worksheet, keyword As String) As String
+    Dim mergedAreas As Range
+    Dim mergedArea As Range
+    Dim cellValue As String
+    Dim i As Long
+    
+    On Error GoTo ErrorHandler
+    
+    ' Get all merged cells in the worksheet (limited range for performance)
+    Dim searchRange As Range
+    Set searchRange = worksheetTarget.Range("A1:CV20")  ' Up to column CV (100 columns), 20 rows
+    
+    ' Check each cell for merged status and content
+    For Each mergedArea In searchRange
+        If mergedArea.MergeCells Then
+            cellValue = GetMergedCellValue(worksheetTarget, mergedArea.Address)
+            
+            ' Check if keyword exists in merged cell content
+            If InStr(1, cellValue, keyword, vbTextCompare) > 0 Then
+                FindKeywordInMergedCells = mergedArea.Address
+                Debug.Print "Found '" & keyword & "' in merged cell at " & mergedArea.Address
+                Debug.Print "  Merged cell content: [" & cellValue & "]"
+                Exit Function
+            End If
+        End If
+    Next mergedArea
+    
+    FindKeywordInMergedCells = ""
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindKeywordInMergedCells Error for '" & keyword & "': " & Err.Description
+    FindKeywordInMergedCells = ""
+End Function
+
+' Enhanced function to find merged cell ranges containing keywords
+Private Function FindMergedCellRangeWithKeyword(worksheetTarget As Worksheet, keyword As String) As String
+    Dim i As Long, j As Long
+    Dim currentCell As Range
+    Dim mergeArea As Range
+    Dim cellContent As String
+    Dim maxSearchRows As Long, maxSearchColumns As Long
+    
+    On Error GoTo ErrorHandler
+    
+    maxSearchRows = 20
+    maxSearchColumns = 100
+    
+    Debug.Print "Searching for '" & keyword & "' in merged cells (range: A1 to " & _
+               ColumnNumberToLetter(maxSearchColumns) & maxSearchRows & ")"
+    
+    For i = 1 To maxSearchRows
+        For j = 1 To maxSearchColumns
+            Set currentCell = worksheetTarget.Cells(i, j)
+            
+            ' Skip if we've already processed this merged area
+            If currentCell.MergeCells Then
+                Set mergeArea = currentCell.MergeArea
+                
+                ' Get the top-left cell of the merged area
+                If currentCell.Address = mergeArea.Cells(1, 1).Address Then
+                    cellContent = GetMergedCellValue(worksheetTarget, currentCell.Address)
+                    
+                    If InStr(1, cellContent, keyword, vbTextCompare) > 0 Then
+                        FindMergedCellRangeWithKeyword = currentCell.Address
+                        Debug.Print "Found '" & keyword & "' in merged range starting at " & currentCell.Address
+                        Debug.Print "  Merged range: " & mergeArea.Address
+                        Debug.Print "  Content: [" & cellContent & "]"
+                        Exit Function
+                    End If
+                End If
+            End If
+        Next j
+    Next i
+    
+    FindMergedCellRangeWithKeyword = ""
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "FindMergedCellRangeWithKeyword Error for '" & keyword & "': " & Err.Description
+    FindMergedCellRangeWithKeyword = ""
+End Function
+
+' Helper function to convert column number to letter
+Private Function ColumnNumberToLetter(columnNumber As Long) As String
+    Dim columnLetter As String
+    
+    If columnNumber <= 26 Then
+        ColumnNumberToLetter = Chr(64 + columnNumber)
+    Else
+        ColumnNumberToLetter = Chr(64 + Int((columnNumber - 1) / 26)) & Chr(65 + ((columnNumber - 1) Mod 26))
+    End If
+End Function
+
+' Function to get worksheet by name safely
+Private Function GetWorksheetByName(workbookTarget As Workbook, sheetName As String) As Worksheet
+    Dim ws As Worksheet
+    
+    On Error GoTo ErrorHandler
+    
+    ' Check if workbook is valid
+    If workbookTarget Is Nothing Then
+        Set GetWorksheetByName = Nothing
+        Exit Function
+    End If
+    
+    ' Try to get worksheet by name
+    Set ws = workbookTarget.Worksheets(sheetName)
+    
+    ' Verify worksheet is accessible
+    If IsWorksheetAccessible(ws) Then
+        Set GetWorksheetByName = ws
+        Debug.Print "Found target worksheet: " & sheetName
+    Else
+        Set GetWorksheetByName = Nothing
+        Debug.Print "Worksheet found but not accessible: " & sheetName
+    End If
+    
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "GetWorksheetByName Error for '" & sheetName & "': " & Err.Description
+    Set GetWorksheetByName = Nothing
+End Function
+
+' Function to get dynamic column header from specific address
+Private Function GetDynamicColumnHeader(worksheetTarget As Worksheet, cellAddress As String, defaultHeader As String) As String
+    Dim headerValue As String
+    
+    On Error GoTo ErrorHandler
+    
+    ' Get the actual header value from the specified cell
+    headerValue = GetMergedCellValue(worksheetTarget, cellAddress)
+    
+    ' If header value is valid, use it; otherwise use default
+    If Trim(headerValue) <> "" Then
+        GetDynamicColumnHeader = Trim(headerValue)
+        Debug.Print "Found dynamic header at " & cellAddress & ": " & headerValue
+    Else
+        GetDynamicColumnHeader = defaultHeader
+        Debug.Print "Using default header for " & cellAddress & ": " & defaultHeader
+    End If
+    
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "GetDynamicColumnHeader Error for " & cellAddress & ": " & Err.Description
+    GetDynamicColumnHeader = defaultHeader
+End Function
+
+' 単一シートからデータを抽出する関数
+Private Function ExtractDataFromSheet(ws As Worksheet, sheetResult As Object) As Collection
+    Dim dataCollection As Collection
+    Dim lastRow As Long
+    
+    On Error GoTo ErrorHandler
+    
+    Set dataCollection = New Collection
+    
+    Debug.Print "    シートからのデータ抽出開始: " & ws.Name
+    
+    ' 動的に最終行を取得
+    lastRow = GetMaxRowFromDynamicColumns(ws, sheetResult)
+    Debug.Print "      最終行: " & lastRow
+    
+    ' データを抽出（検索結果を使用）
+    If IsDataRowsAvailable(lastRow) Then
+        Debug.Print "      ExtractDataRows呼び出し"
+        Set dataCollection = ExtractDataRows(ws, lastRow, sheetResult)
+        Debug.Print "      抽出完了: " & dataCollection.Count & " 行"
+    Else
+        Debug.Print "      有効なデータ行が見つかりません"
+    End If
+    
+    Set ExtractDataFromSheet = dataCollection
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "ExtractDataFromSheet Error for " & ws.Name & ": " & Err.Description
+    Set ExtractDataFromSheet = New Collection
+End Function
+
+' 完全バックグラウンドモードでワークブックを開く関数
+Private Function OpenWorkbookInBackground(filePath As String) As Workbook
+    On Error GoTo ErrorHandler
+    
+    ' 画面更新を停止し、通知を無効化（Excelアプリケーション自体は表示したまま）
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    Application.EnableEvents = False
+    Application.AskToUpdateLinks = False
+    
+    ' バックグラウンド設定でワークブックを開く
+    Set OpenWorkbookInBackground = Workbooks.Open( _
+        Filename:=filePath, _
+        UpdateLinks:=0, _
+        ReadOnly:=True, _
+        Notify:=False, _
+        AddToMru:=False, _
+        Editable:=False _
+    )
+    
+    ' ワークブックウィンドウも確実に非表示にする
+    If Not OpenWorkbookInBackground Is Nothing Then
+        ' 全てのウィンドウを非表示にする
+        Dim i As Long
+        For i = 1 To OpenWorkbookInBackground.Windows.Count
+            OpenWorkbookInBackground.Windows(i).Visible = False
+        Next i
+        ' ワークブックをアクティブにしない（現在のアクティブブックを変更しない）
+        Debug.Print "ワークブック " & OpenWorkbookInBackground.Name & " を非表示で開きました"
+    End If
+    
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "OpenWorkbookInBackground Error: " & Err.Description
+    Set OpenWorkbookInBackground = Nothing
+End Function
+
+' Excelの表示状態を元に戻す関数（アプリケーション自体の表示は変更しない）
+Private Sub RestoreExcelVisibility()
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    Application.EnableEvents = True
+End Sub
+
+' 実際のセル値からヘッダー名を取得する関数
+Private Function GetActualHeaderValue(ws As Worksheet, cellAddress As String) As String
+    Dim headerValue As String
+    
+    On Error GoTo ErrorHandler
+    
+    If cellAddress = "" Or ws Is Nothing Then
+        GetActualHeaderValue = ""
+        Exit Function
+    End If
+    
+    ' セルの実際の値を取得（マージセル対応）
+    headerValue = GetMergedCellValue(ws, cellAddress)
+    
+    ' ヘッダー値をクリーンアップ
+    headerValue = Trim(headerValue)
+    headerValue = Replace(headerValue, vbLf, "")
+    headerValue = Replace(headerValue, vbCr, "")
+    headerValue = Replace(headerValue, Chr(160), " ")  ' 全角スペースを半角に
+    
+    ' 空の場合は周辺セルの言語を判定してデフォルト値を設定
+    If headerValue = "" Then
+        headerValue = GetDefaultHeaderByLanguage(cellAddress)
+    Else
+        ' 実際の値がある場合は、その値をそのまま使用
+        ' ただし、表示用に整形
+        headerValue = FormatHeaderForDisplay(headerValue)
+    End If
+    
+    GetActualHeaderValue = headerValue
+    Debug.Print "      実際のヘッダー値: " & cellAddress & " → [" & headerValue & "]"
+    
+    Exit Function
+    
+ErrorHandler:
+    Debug.Print "GetActualHeaderValue Error for " & cellAddress & ": " & Err.Description
+    GetActualHeaderValue = GetDefaultHeaderByLanguage(cellAddress)
+End Function
+
+' セルアドレスに基づいてデフォルトヘッダーを言語判定して返す関数
+Private Function GetDefaultHeaderByLanguage(cellAddress As String) As String
+    ' 簡易的な言語判定（今後の拡張に備えて）
+    ' 現在はデフォルトで日本語を返す
+    
+    If InStr(cellAddress, "$") > 0 Then
+        ' 列番号から判定
+        Dim colLetter As String
+        colLetter = Replace(Replace(cellAddress, "$", ""), Mid(cellAddress, InStr(cellAddress, "$", 2)), "")
+        
+        Select Case UCase(colLetter)
+            Case "A", "B"  ' リスク項目列の場合
+                GetDefaultHeaderByLanguage = "リスク項目No."
+            Case "F"       ' 危険状態列の場合
+                GetDefaultHeaderByLanguage = "危険状態"
+            Case "G"       ' 危害列の場合
+                GetDefaultHeaderByLanguage = "危害"
+            Case "H"       ' 重大さレベル列の場合
+                GetDefaultHeaderByLanguage = "重大さレベル"
+            Case Else
+                GetDefaultHeaderByLanguage = "項目"
+        End Select
+    Else
+        GetDefaultHeaderByLanguage = "項目"
+    End If
+End Function
+
+' ヘッダー値を表示用に整形する関数
+Private Function FormatHeaderForDisplay(rawHeader As String) As String
+    Dim formattedHeader As String
+    formattedHeader = rawHeader
+    
+    ' 長すぎるヘッダーを短縮
+    If Len(formattedHeader) > 50 Then
+        formattedHeader = Left(formattedHeader, 47) & "..."
+    End If
+    
+    ' 一般的な短縮形に変換
+    formattedHeader = Replace(formattedHeader, "リスク項目No.", "リスク項目No.")
+    formattedHeader = Replace(formattedHeader, "重大さレベル", "重大さレベル")
+    formattedHeader = Replace(formattedHeader, "Risk Item", "Risk Item")
+    formattedHeader = Replace(formattedHeader, "Hazardous Situation", "Hazardous Situation")
+    formattedHeader = Replace(formattedHeader, "Risk Level", "Risk Level")
+    
+    FormatHeaderForDisplay = formattedHeader
+End Function
+
